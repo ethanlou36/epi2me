@@ -61,8 +61,10 @@ C:\WPS_Runs\Run_2026_04_29\
     barcode02.annotations.gbk
 
   bam_files\
-    FBD...barcode01...bam
-    FBD...barcode02...bam
+    barcode01\
+      FBD...bam
+    barcode02\
+      FBD...bam
 
   fastq_files\                  optional
     barcode01.final.fastq
@@ -79,7 +81,8 @@ Each barcode must have:
 
 - `barcodeXX.final.fasta`
 - `barcodeXX.annotations.gbk`
-- one raw/unmapped `.bam` file with that barcode in the filename
+- one raw/unmapped `.bam` file. The BAM can either have the barcode in the
+  filename, or it can be inside a barcode folder such as `bam_files\barcode01\`.
 
 Optional files:
 

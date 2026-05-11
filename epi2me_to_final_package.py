@@ -340,7 +340,7 @@ def add_discovered_file(
         discovery_errors.append(
             {
                 "barcode": barcode,
-                "reason": f"multiple {key} files found: {existing.name}, {path.name}",
+                "reason": f"multiple {key} files found: {existing}, {path}",
             }
         )
     else:
@@ -368,6 +368,44 @@ def discover_files_for_key(
         add_discovered_file(records, discovery_errors, barcode, key, path)
 
 
+def infer_bam_barcode(path: Path, file_pattern: re.Pattern) -> tuple[str | None, str | None]:
+    filename_match = file_pattern.match(path.name)
+    filename_barcode = normalize_barcode(filename_match.group(1)) if filename_match else None
+    folder_barcodes = [
+        normalize_barcode(parent.name)
+        for parent in path.parents
+        if re.fullmatch(r"barcode\d+", parent.name, re.IGNORECASE)
+    ]
+    folder_barcode = folder_barcodes[0] if folder_barcodes else None
+
+    if filename_barcode and folder_barcode and filename_barcode != folder_barcode:
+        return None, f"BAM filename barcode {filename_barcode} does not match folder barcode {folder_barcode}: {path}"
+    return filename_barcode or folder_barcode, None
+
+
+def discover_bam_files(
+    records: dict[str, dict[str, Path]],
+    discovery_errors: list[dict[str, str]],
+    directory: Path,
+) -> None:
+    if not directory.exists():
+        raise ValueError(f"bam directory does not exist: {directory}")
+    if not directory.is_dir():
+        raise ValueError(f"bam path is not a directory: {directory}")
+
+    file_pattern = re.compile(r"^.*(barcode\d+)(?:[^0-9].*)?\.bam$", re.IGNORECASE)
+    for path in directory.rglob("*.bam"):
+        if not path.is_file():
+            continue
+        barcode, error = infer_bam_barcode(path, file_pattern)
+        if error:
+            discovery_errors.append({"barcode": "unknown", "reason": error})
+            continue
+        if barcode is None:
+            continue
+        add_discovered_file(records, discovery_errors, barcode, "bam", path)
+
+
 def discover_input_records(
     fasta_dir: Path,
     genbank_dir: Path,
@@ -391,13 +429,7 @@ def discover_input_records(
         genbank_dir,
         re.compile(r"^(barcode\d+)\.annotations\.gbk$", re.IGNORECASE),
     )
-    discover_files_for_key(
-        records,
-        discovery_errors,
-        "bam",
-        bam_dir,
-        re.compile(r"^.*(barcode\d+)(?:[^0-9].*)?\.bam$", re.IGNORECASE),
-    )
+    discover_bam_files(records, discovery_errors, bam_dir)
     if fastq_dir is not None:
         discover_files_for_key(
             records,
@@ -1018,7 +1050,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bam-dir",
         required=True,
-        help="Directory containing raw/unmapped BAM files with barcodeXX in each filename.",
+        help="Directory containing raw/unmapped BAM files. BAMs may be directly inside it or inside barcodeXX subfolders.",
     )
     parser.add_argument(
         "--fastq-dir",
