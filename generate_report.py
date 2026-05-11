@@ -1,0 +1,649 @@
+#!/usr/bin/env python3
+"""
+Generate a report-style summary from aligned plasmid sequencing outputs.
+
+Inputs:
+- aligned BAM
+- contig FASTA
+- optional reference FASTA
+- optional MAF
+- optional GenBank
+
+Outputs:
+- nested summary dictionary (returned from generate_report_data)
+- JSON written to out_dir/report_summary.json
+- figures written to out_dir
+"""
+
+import argparse
+import csv
+import json
+import math
+import os
+import re
+import statistics
+import tempfile
+from collections import Counter
+from pathlib import Path
+
+os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "altabiotech_mplcache"))
+os.environ.setdefault("MPLBACKEND", "Agg")
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import pysam
+
+from bam_to_per_base_data import summarize_bam_to_table
+
+
+def read_first_fasta_record(path):
+    name = None
+    chunks = []
+    with open(path, "r", encoding="ascii") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                if name is not None:
+                    break
+                name = line[1:].split()[0]
+            else:
+                chunks.append(line)
+    if name is None:
+        raise ValueError(f"No FASTA record found in {path}")
+    sequence = "".join(chunks).upper()
+    return {"name": name, "sequence": sequence, "length_bp": len(sequence)}
+
+
+def parse_plasmidasaurus_summary(path):
+    text = Path(path).read_text(encoding="ascii", errors="replace")
+    moles = {}
+    mass = {}
+
+    header_match = re.search(r"^\s+(.*)$", text, flags=re.MULTILINE)
+    if header_match:
+        header = header_match.group(1)
+        multiples = [int(match) for match in re.findall(r"(\d+)-mer", header)]
+        moles_match = re.search(r"^moles\s+([0-9.\s]+)$", text, flags=re.MULTILINE)
+        mass_match = re.search(r"^mass\s+([0-9.\s]+)$", text, flags=re.MULTILINE)
+        if moles_match:
+            values = [float(value) for value in moles_match.group(1).split()]
+            for multiple, value in zip(multiples, values):
+                moles[f"{multiple}-mer"] = value
+        if mass_match:
+            values = [float(value) for value in mass_match.group(1).split()]
+            for multiple, value in zip(multiples, values):
+                mass[f"{multiple}-mer"] = value
+
+    contamination_match = re.search(
+        r"E\. coli genomic contamination:\s*([0-9.]+)%",
+        text,
+        flags=re.IGNORECASE,
+    )
+    contamination_pct = float(contamination_match.group(1)) if contamination_match else None
+    return {
+        "multimer_by_moles_pct": moles or None,
+        "multimer_by_mass_pct": mass or None,
+        "ecoli_genomic_contamination_pct": contamination_pct,
+    }
+
+
+def parse_genbank_summary(path):
+    locus_name = None
+    locus_length = None
+    is_circular = None
+    in_features = False
+    features = []
+    current_feature = None
+
+    with open(path, "r", encoding="ascii", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\n")
+            if line.startswith("LOCUS"):
+                parts = line.split()
+                if len(parts) >= 3:
+                    locus_name = parts[1]
+                    try:
+                        locus_length = int(parts[2])
+                    except ValueError:
+                        locus_length = None
+                is_circular = "circular" in line.lower()
+            elif line.startswith("FEATURES"):
+                in_features = True
+                continue
+            elif line.startswith("ORIGIN") or line.startswith("//"):
+                in_features = False
+                current_feature = None
+            elif in_features:
+                if line.startswith("     ") and not line.startswith("                     /"):
+                    feature_type = line[5:21].strip()
+                    location = line[21:].strip()
+                    if feature_type:
+                        current_feature = {
+                            "type": feature_type,
+                            "location": location,
+                            "qualifiers": {},
+                        }
+                        features.append(current_feature)
+                elif current_feature and line.startswith("                     /"):
+                    qualifier = line.strip()[1:]
+                    if "=" in qualifier:
+                        key, value = qualifier.split("=", 1)
+                        current_feature["qualifiers"][key] = value.strip('"')
+                    else:
+                        current_feature["qualifiers"][qualifier] = True
+
+    feature_counts = Counter(feature["type"] for feature in features)
+    labels = [
+        feature["qualifiers"].get("label")
+        for feature in features
+        if feature["qualifiers"].get("label")
+    ]
+    return {
+        "locus_name": locus_name,
+        "length_bp": locus_length,
+        "is_circular": is_circular,
+        "feature_count": len(features),
+        "feature_type_counts": dict(sorted(feature_counts.items())),
+        "labels": labels,
+        "features": features,
+    }
+
+
+def parse_maf_summary(path, contig_length):
+    blocks = []
+    current_score = None
+    current_s_lines = []
+
+    with open(path, "r", encoding="ascii", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                if len(current_s_lines) >= 2:
+                    blocks.append({"score": current_score, "s_lines": current_s_lines[:2]})
+                current_score = None
+                current_s_lines = []
+                continue
+            if line.startswith("a "):
+                match = re.search(r"score=([^\s]+)", line)
+                current_score = float(match.group(1)) if match else None
+            elif line.startswith("s "):
+                current_s_lines.append(line.split())
+
+    if len(current_s_lines) >= 2:
+        blocks.append({"score": current_score, "s_lines": current_s_lines[:2]})
+
+    summaries = []
+    for block in blocks:
+        first = block["s_lines"][0]
+        second = block["s_lines"][1]
+        seq1 = first[6]
+        seq2 = second[6]
+        matches = 0
+        mismatches = 0
+        gaps = 0
+        for base1, base2 in zip(seq1, seq2):
+            if base1 == "-" or base2 == "-":
+                gaps += 1
+            elif base1.upper() == base2.upper():
+                matches += 1
+            else:
+                mismatches += 1
+
+        aligned_columns = len(seq1)
+        start1 = int(first[2])
+        start2 = int(second[2])
+        size1 = int(first[3])
+        size2 = int(second[3])
+        is_full_self = start1 == 0 and start2 == 0 and size1 == contig_length and size2 == contig_length
+        summaries.append(
+            {
+                "score": block["score"],
+                "start_1": start1,
+                "start_2": start2,
+                "aligned_columns": aligned_columns,
+                "aligned_bases_1": size1,
+                "aligned_bases_2": size2,
+                "matches": matches,
+                "mismatches": mismatches,
+                "gaps": gaps,
+                "identity_pct": (matches / aligned_columns * 100.0) if aligned_columns else 0.0,
+                "is_full_self": is_full_self,
+            }
+        )
+
+    repeat_blocks = [summary for summary in summaries if not summary["is_full_self"]]
+    largest_repeat = max(repeat_blocks, key=lambda item: item["aligned_bases_1"], default=None)
+    return {
+        "block_count": len(summaries),
+        "repeat_block_count": len(repeat_blocks),
+        "largest_repeat_block_bp": largest_repeat["aligned_bases_1"] if largest_repeat else 0,
+        "largest_repeat_identity_pct": round(largest_repeat["identity_pct"], 3) if largest_repeat else 0.0,
+        "largest_repeat_span_fraction": (
+            largest_repeat["aligned_bases_1"] / contig_length if largest_repeat and contig_length else 0.0
+        ),
+        "top_repeat_blocks": repeat_blocks[:10],
+    }
+
+
+def read_per_base_rows(csv_path):
+    with open(csv_path, "r", encoding="ascii", newline="") as handle:
+        reader = csv.DictReader(handle)
+        return list(reader)
+
+
+def compute_n50(lengths):
+    if not lengths:
+        return 0
+    total = sum(lengths)
+    running = 0
+    for length in sorted(lengths, reverse=True):
+        running += length
+        if running >= total / 2:
+            return length
+    return 0
+
+
+MULTIMER_TOLERANCE_FRACTION = 0.10
+
+
+def classify_multimer(read_length, contig_length, tolerance_fraction=MULTIMER_TOLERANCE_FRACTION, max_multiple=4):
+    if contig_length <= 0:
+        return None
+    ratio = read_length / contig_length
+    candidates = [
+        (abs(ratio - multiple), multiple)
+        for multiple in range(1, max_multiple + 1)
+        if abs(ratio - multiple) <= tolerance_fraction
+    ]
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][1]
+
+
+def multimer_breakdown(
+    read_lengths,
+    contig_length,
+    tolerance_fraction=MULTIMER_TOLERANCE_FRACTION,
+    max_multiple=4,
+):
+    counts = {multiple: 0 for multiple in range(1, max_multiple + 1)}
+    masses = {multiple: 0 for multiple in range(1, max_multiple + 1)}
+
+    for read_length in read_lengths:
+        multiple = classify_multimer(
+            read_length,
+            contig_length=contig_length,
+            tolerance_fraction=tolerance_fraction,
+            max_multiple=max_multiple,
+        )
+        if multiple is None:
+            continue
+        counts[multiple] += 1
+        masses[multiple] += read_length
+
+    classified_read_count = sum(counts.values())
+    classified_base_count = sum(masses.values())
+    moles_pct = {
+        f"{multiple}-mer": round((counts[multiple] / classified_read_count * 100.0), 3)
+        if classified_read_count
+        else 0.0
+        for multiple in counts
+    }
+    mass_pct = {
+        f"{multiple}-mer": round((masses[multiple] / classified_base_count * 100.0), 3)
+        if classified_base_count
+        else 0.0
+        for multiple in masses
+    }
+    return {
+        "counts": {f"{multiple}-mer": counts[multiple] for multiple in counts},
+        "bases": {f"{multiple}-mer": masses[multiple] for multiple in masses},
+        "moles_pct": moles_pct,
+        "mass_pct": mass_pct,
+        "classified_read_count": classified_read_count,
+        "classified_base_count": classified_base_count,
+        "unclassified_read_count": len(read_lengths) - classified_read_count,
+        "unclassified_base_count": sum(read_lengths) - classified_base_count,
+    }
+
+
+def bam_summary(bam_path, contig_length):
+    total_records = 0
+    total_read_bases = 0
+    primary_read_lengths = []
+    mapped_primary_read_lengths = []
+    mapped_primary_count = 0
+    mapped_bases = 0
+
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        contig = bam.references[0] if bam.nreferences == 1 else None
+        for read in bam.fetch(until_eof=True):
+            total_records += 1
+            if read.is_secondary or read.is_supplementary:
+                continue
+            qlen = read.query_length or 0
+            total_read_bases += qlen
+            primary_read_lengths.append(qlen)
+            if read.is_unmapped:
+                continue
+            mapped_primary_count += 1
+            mapped_primary_read_lengths.append(qlen)
+            mapped_bases += read.query_alignment_length or 0
+
+    multimer = multimer_breakdown(mapped_primary_read_lengths, contig_length)
+    return {
+        "total_records": total_records,
+        "total_bases": total_read_bases,
+        "primary_reads": len(primary_read_lengths),
+        "mapped_primary_reads": mapped_primary_count,
+        "mapped_read_pct": (mapped_primary_count / len(primary_read_lengths) * 100.0) if primary_read_lengths else 0.0,
+        "mapped_bases": mapped_bases,
+        "mapped_base_pct": (mapped_bases / total_read_bases * 100.0) if total_read_bases else 0.0,
+        "mean_read_length": round(statistics.fmean(primary_read_lengths), 3) if primary_read_lengths else 0.0,
+        "median_read_length": statistics.median(primary_read_lengths) if primary_read_lengths else 0,
+        "read_length_n50": compute_n50(primary_read_lengths),
+        "mapped_mean_read_length": round(statistics.fmean(mapped_primary_read_lengths), 3)
+        if mapped_primary_read_lengths
+        else 0.0,
+        "monomer_pct": multimer["moles_pct"]["1-mer"],
+        "dimer_pct": multimer["moles_pct"]["2-mer"],
+        "trimer_pct": multimer["moles_pct"]["3-mer"],
+        "tetramer_pct": multimer["moles_pct"]["4-mer"],
+        "multimer_by_moles_pct": multimer["moles_pct"],
+        "multimer_by_mass_pct": multimer["mass_pct"],
+        "classified_multimer_read_count": multimer["classified_read_count"],
+        "classified_multimer_base_count": multimer["classified_base_count"],
+        "unclassified_multimer_read_count": multimer["unclassified_read_count"],
+        "unclassified_multimer_base_count": multimer["unclassified_base_count"],
+        "primary_read_lengths": primary_read_lengths,
+    }
+
+
+def coverage_summary(per_base_rows, low_conf_rows, contig_length):
+    depths = [int(row["depth"]) for row in per_base_rows]
+    low_positions = [int(row["pos"]) for row in low_conf_rows]
+    return {
+        "mean_depth": round(statistics.fmean(depths), 3) if depths else 0.0,
+        "median_depth": statistics.median(depths) if depths else 0,
+        "min_depth": min(depths) if depths else 0,
+        "max_depth": max(depths) if depths else 0,
+        "covered_bases": sum(1 for depth in depths if depth > 0),
+        "coverage_breadth_pct": (sum(1 for depth in depths if depth > 0) / contig_length * 100.0)
+        if contig_length
+        else 0.0,
+        "low_confidence_count": len(low_positions),
+        "low_confidence_positions_preview": low_positions[:20],
+    }
+
+
+def plot_coverage_map(per_base_rows, low_conf_rows, out_path, title):
+    positions = [int(row["pos"]) for row in per_base_rows]
+    depths = [int(row["depth"]) for row in per_base_rows]
+    depth_by_pos = {int(row["pos"]): int(row["depth"]) for row in per_base_rows}
+    low_positions = [int(row["pos"]) for row in low_conf_rows]
+    low_depths = [depth_by_pos[pos] for pos in low_positions if pos in depth_by_pos]
+
+    fig, ax = plt.subplots(figsize=(11, 4.8))
+    ax.plot(positions, depths, color="#2f6c9e", linewidth=1.1)
+    if low_positions:
+        ax.scatter(low_positions, low_depths, marker="x", color="#e67e22", s=18, linewidths=0.8)
+    ax.set_xlim(left=0, right=max(positions))
+    ax.margins(x=0)
+    ax.set_xlabel("Base Position")
+    ax.set_ylabel("Depth")
+    ax.set_title(title)
+    ax.grid(alpha=0.2)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def plot_read_length_histogram(read_lengths, out_path, title):
+    fig, ax = plt.subplots(figsize=(8.5, 5))
+    bins = min(80, max(15, int(math.sqrt(len(read_lengths))))) if read_lengths else 20
+    ax.hist(read_lengths, bins=bins, color="#6d8f72", edgecolor="white")
+    ax.set_xlabel("Read Length (bp)")
+    ax.set_ylabel("Read Count")
+    ax.set_title(title)
+    ax.grid(axis="y", alpha=0.2)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def location_segments(location):
+    return [(int(start), int(end)) for start, end in re.findall(r"(\d+)\.\.(\d+)", location)]
+
+
+def plot_feature_map(gbk_summary, contig_length, out_path, title):
+    features = gbk_summary["features"]
+    if not features:
+        return None
+
+    color_by_type = {
+        "CDS": "#4c78a8",
+        "gene": "#f58518",
+        "promoter": "#54a24b",
+        "rep_origin": "#e45756",
+        "terminator": "#72b7b2",
+        "misc_feature": "#b279a2",
+        "ncRNA": "#ff9da6",
+        "intron": "#9d755d",
+    }
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    ax.hlines(0, 0, contig_length, color="black", linewidth=1)
+
+    row_count = max(1, min(8, len(features)))
+    for idx, feature in enumerate(features):
+        y = 0.2 + (idx % row_count) * 0.18
+        feature_type = feature["type"]
+        color = color_by_type.get(feature_type, "#7f7f7f")
+        for start, end in location_segments(feature["location"]):
+            ax.broken_barh([(start - 1, end - start + 1)], (y, 0.12), facecolors=color)
+        label = feature["qualifiers"].get("label", feature_type)
+        first_segment = location_segments(feature["location"])
+        if first_segment:
+            ax.text(first_segment[0][0], y + 0.14, label, fontsize=7, va="bottom")
+
+    ax.set_xlim(0, contig_length)
+    ax.set_ylim(-0.05, 0.2 + row_count * 0.18 + 0.18)
+    ax.set_xlabel("Base Position")
+    ax.set_yticks([])
+    ax.set_title(title)
+    ax.grid(axis="x", alpha=0.15)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    return out_path
+
+
+def generate_report_data(
+    aligned_bam,
+    contig_fasta,
+    out_dir,
+    reference_fasta=None,
+    maf_path=None,
+    gbk_path=None,
+    sample_name=None,
+    low_confidence_qscore=12,
+    plasmidasaurus_summary_txt=None,
+    ecoli_contamination_pct=None,
+):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    contig = read_first_fasta_record(contig_fasta)
+    reference = read_first_fasta_record(reference_fasta) if reference_fasta else None
+    gbk_summary = parse_genbank_summary(gbk_path) if gbk_path else None
+    maf_summary = parse_maf_summary(maf_path, contig["length_bp"]) if maf_path else None
+    bam_stats = bam_summary(aligned_bam, contig["length_bp"])
+    vendor_summary = parse_plasmidasaurus_summary(plasmidasaurus_summary_txt) if plasmidasaurus_summary_txt else None
+    if ecoli_contamination_pct is None and vendor_summary is not None:
+        ecoli_contamination_pct = vendor_summary["ecoli_genomic_contamination_pct"]
+
+    per_base_csv = out_dir / "per_base_details.csv"
+    low_conf_csv = out_dir / "low_confidence_bases.csv"
+    summarize_bam_to_table(
+        bam_path=aligned_bam,
+        output_csv=per_base_csv,
+        reference_path=reference_fasta,
+        include_zero_depth=bool(reference_fasta),
+        low_confidence_out=low_conf_csv,
+        low_confidence_qscore=low_confidence_qscore,
+    )
+
+    per_base_rows = read_per_base_rows(per_base_csv)
+    low_conf_rows = read_per_base_rows(low_conf_csv)
+    coverage_stats = coverage_summary(per_base_rows, low_conf_rows, contig["length_bp"])
+
+    coverage_png = out_dir / "coverage_map.png"
+    read_len_png = out_dir / "read_length_distribution.png"
+    feature_map_png = out_dir / "feature_map.png"
+
+    plot_coverage_map(
+        per_base_rows,
+        low_conf_rows,
+        coverage_png,
+        title=f"{contig['name']} Coverage Map",
+    )
+    plot_read_length_histogram(
+        bam_stats["primary_read_lengths"],
+        read_len_png,
+        title="Read Length Distribution",
+    )
+    feature_map_written = None
+    if gbk_summary is not None:
+        feature_map_written = plot_feature_map(
+            gbk_summary,
+            contig["length_bp"],
+            feature_map_png,
+            title="Annotation Map",
+        )
+
+    report = {
+        "sample_name": sample_name or contig["name"],
+        "contig": {
+            "name": contig["name"],
+            "length_bp": contig["length_bp"],
+            "is_circular": bool(gbk_summary["is_circular"]) if gbk_summary is not None else None,
+        },
+        "reference": (
+            {
+                "name": reference["name"],
+                "length_bp": reference["length_bp"],
+            }
+            if reference is not None
+            else None
+        ),
+        "sequencing_information": {
+            "total_dna_reads": bam_stats["primary_reads"],
+            "total_dna_bases": bam_stats["total_bases"],
+            "mean_read_length": bam_stats["mean_read_length"],
+            "median_read_length": bam_stats["median_read_length"],
+            "read_length_n50": bam_stats["read_length_n50"],
+        },
+        "assembly_status": {
+            "contig": contig["name"],
+            "length_bp": contig["length_bp"],
+            "reads_mapped": bam_stats["mapped_primary_reads"],
+            "reads_mapped_pct": round(bam_stats["mapped_read_pct"], 3),
+            "bases_mapped": bam_stats["mapped_bases"],
+            "bases_mapped_pct": round(bam_stats["mapped_base_pct"], 3),
+            "coverage_x": round(coverage_stats["mean_depth"], 3),
+            "median_coverage_x": coverage_stats["median_depth"],
+            "is_circular": bool(gbk_summary["is_circular"]) if gbk_summary is not None else None,
+            "monomer_pct": bam_stats["monomer_pct"],
+            "dimer_pct": bam_stats["dimer_pct"],
+            "trimer_pct": bam_stats["trimer_pct"],
+            "tetramer_pct": bam_stats["tetramer_pct"],
+            "multimer_by_moles_pct": bam_stats["multimer_by_moles_pct"],
+            "multimer_by_mass_pct": bam_stats["multimer_by_mass_pct"],
+            "classified_multimer_read_count": bam_stats["classified_multimer_read_count"],
+            "classified_multimer_base_count": bam_stats["classified_multimer_base_count"],
+            "unclassified_multimer_read_count": bam_stats["unclassified_multimer_read_count"],
+            "unclassified_multimer_base_count": bam_stats["unclassified_multimer_base_count"],
+        },
+        "coverage": coverage_stats,
+        "contamination": {
+            "ecoli_genomic_contamination_pct": ecoli_contamination_pct,
+        },
+        "maf_summary": maf_summary,
+        "genbank_summary": (
+            {
+                "locus_name": gbk_summary["locus_name"],
+                "length_bp": gbk_summary["length_bp"],
+                "feature_count": gbk_summary["feature_count"],
+                "feature_type_counts": gbk_summary["feature_type_counts"],
+                "labels": gbk_summary["labels"],
+            }
+            if gbk_summary is not None
+            else None
+        ),
+        "plasmidasaurus_summary": vendor_summary,
+        "outputs": {
+            "per_base_details_csv": str(per_base_csv),
+            "low_confidence_bases_csv": str(low_conf_csv),
+            "coverage_map_png": str(coverage_png),
+            "read_length_distribution_png": str(read_len_png),
+            "feature_map_png": str(feature_map_written) if feature_map_written else None,
+        },
+    }
+
+    summary_json = out_dir / "report_summary.json"
+    with open(summary_json, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2, sort_keys=True)
+    report["outputs"]["report_summary_json"] = str(summary_json)
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--aligned-bam", required=True, help="Aligned BAM input")
+    parser.add_argument("--contig-fasta", required=True, help="Consensus/contig FASTA")
+    parser.add_argument("--reference-fasta", default=None, help="Optional reference FASTA")
+    parser.add_argument("--maf", default=None, help="Optional MAF alignment file")
+    parser.add_argument("--gbk", default=None, help="Optional annotated GenBank file")
+    parser.add_argument(
+        "--plasmidasaurus-summary-txt",
+        default=None,
+        help="Optional Plasmidasaurus summary TXT used to import E. coli contamination and vendor summary values",
+    )
+    parser.add_argument("--out-dir", required=True, help="Output directory for JSON and figures")
+    parser.add_argument("--sample-name", default=None, help="Optional sample name override")
+    parser.add_argument(
+        "--ecoli-contamination-pct",
+        type=float,
+        default=None,
+        help="Optional E. coli genomic contamination percentage to include in the report",
+    )
+    parser.add_argument(
+        "--low-confidence-qscore",
+        type=int,
+        default=12,
+        help="Mean BAM base-quality threshold for marking low-confidence positions",
+    )
+    args = parser.parse_args()
+
+    report = generate_report_data(
+        aligned_bam=args.aligned_bam,
+        contig_fasta=args.contig_fasta,
+        reference_fasta=args.reference_fasta,
+        maf_path=args.maf,
+        gbk_path=args.gbk,
+        out_dir=args.out_dir,
+        sample_name=args.sample_name,
+        low_confidence_qscore=args.low_confidence_qscore,
+        plasmidasaurus_summary_txt=args.plasmidasaurus_summary_txt,
+        ecoli_contamination_pct=args.ecoli_contamination_pct,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

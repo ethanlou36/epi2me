@@ -1,0 +1,48 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments
+.venv/
+venv/
+env/
+
+# Customer/run metadata should be passed with --metadata, not committed
+*.xlsx
+
+# Raw sequencing and alignment artifacts
+*.bam
+*.bai
+*.sam
+reads.fastq
+*_reads.fastq
+*.fastq.gz
+*.fq.gz
+*.fai
+
+# Generated customer/package artifacts
+WPS Data_Order #*/
+customer_packages/
+example_data/output/
+example_data/*_report_output/
+**/_work/
+
+# Generated report/package file types
+*.ab1
+*.pdf
+*.png
+
+# Generated summaries and per-base outputs
+run_summary.json
+package_summary.json
+report_summary.json
+*_per_base_details.csv
+*_low_confidence_bases.csv
