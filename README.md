@@ -7,7 +7,8 @@ If several samples have the same `Order #` in the metadata sheet, their reports
 go into the same `WPS Data_Order #...` folder. Samples with different order
 numbers go into separate folders.
 
-These instructions assume you are using Windows.
+The main examples below are for Windows because that is the most common
+operator setup. A macOS section is included after the Windows commands.
 
 ## 1. Install Required Software
 
@@ -40,8 +41,8 @@ samtools --version
 ```
 
 If `minimap2` or `samtools` does not work on native Windows, use the WSL option
-near the bottom of this README. WSL is often the most reliable Windows setup for
-bioinformatics command-line tools.
+near the bottom of this README. WSL is Windows-only. On macOS, use the macOS
+section below.
 
 ## 2. Prepare the Input Folder
 
@@ -206,10 +207,47 @@ The example report will appear under:
 example_data\output\WPS Data_Order #145011068\QC REPORTS\
 ```
 
+## macOS Option
+
+If you are using a Mac, do not use WSL. Use Conda or Homebrew.
+
+Conda is the most self-contained option:
+
+```bash
+conda create -n wps-report -c conda-forge -c bioconda python=3.11 pysam numpy matplotlib minimap2 samtools
+conda activate wps-report
+```
+
+Homebrew also works:
+
+```bash
+brew install python minimap2 samtools
+python3 -m pip install pysam numpy matplotlib
+```
+
+The `brew install` or `conda create` command installs `minimap2` and
+`samtools`. The `python3 -m pip install ...` command only installs Python
+packages.
+
+Run the script on macOS with Unix-style paths:
+
+```bash
+python3 epi2me_to_final_package.py \
+  --fasta-dir /Users/yourname/WPS_Runs/Run_2026_04_29/fasta_files \
+  --genbank-dir /Users/yourname/WPS_Runs/Run_2026_04_29/genbank_files \
+  --bam-dir /Users/yourname/WPS_Runs/Run_2026_04_29/bam_files \
+  --fastq-dir /Users/yourname/WPS_Runs/Run_2026_04_29/fastq_files \
+  --maf-dir /Users/yourname/WPS_Runs/Run_2026_04_29/maf_files \
+  --metadata /Users/yourname/WPS_Runs/Run_2026_04_29/WPS_Working_Sheet_2026_04_29.xlsx \
+  --output-dir /Users/yourname/WPS_Runs/Run_2026_04_29/output \
+  --threads 4 \
+  --sort-memory 1G
+```
+
 ## WSL Option
 
-If native Windows has trouble installing or running `minimap2` or `samtools`,
-use Windows Subsystem for Linux.
+WSL is only for Windows. If native Windows has trouble installing or running
+`minimap2` or `samtools`, use Windows Subsystem for Linux.
 
 1. Install WSL from PowerShell as Administrator:
 
@@ -217,9 +255,11 @@ use Windows Subsystem for Linux.
 wsl --install
 ```
 
-2. Open Ubuntu from the Start menu.
+2. Open **Ubuntu** from the Start menu. Run the rest of the WSL commands in
+   the Ubuntu terminal, not in PowerShell or Anaconda Prompt.
 
-3. Install dependencies:
+3. Install dependencies. `apt` installs `minimap2` and `samtools`; `pip`
+   installs the Python packages.
 
 ```bash
 sudo apt update
@@ -227,30 +267,30 @@ sudo apt install python3 python3-pip minimap2 samtools
 python3 -m pip install pysam numpy matplotlib
 ```
 
-4. Go to the Windows folder from WSL. A Windows path like:
+4. Go to the project folder from WSL. For the Alta workstation, use:
 
 ```text
-C:\Users\YourName\final_epi2me
+/mnt/c/Users/altab/epi2me
 ```
 
-appears in WSL as:
+That path points to this Windows folder:
 
 ```text
-/mnt/c/Users/YourName/final_epi2me
+C:\Users\altab\epi2me
 ```
 
 5. Run the script:
 
 ```bash
-cd /mnt/c/Users/YourName/final_epi2me
+cd /mnt/c/Users/altab/epi2me
 python3 epi2me_to_final_package.py \
-  --fasta-dir /mnt/c/WPS_Runs/Run_2026_04_29/fasta_files \
-  --genbank-dir /mnt/c/WPS_Runs/Run_2026_04_29/genbank_files \
-  --bam-dir /mnt/c/WPS_Runs/Run_2026_04_29/bam_files \
-  --fastq-dir /mnt/c/WPS_Runs/Run_2026_04_29/fastq_files \
-  --maf-dir /mnt/c/WPS_Runs/Run_2026_04_29/maf_files \
-  --metadata /mnt/c/WPS_Runs/Run_2026_04_29/WPS_Working_Sheet_2026_04_29.xlsx \
-  --output-dir /mnt/c/WPS_Runs/Run_2026_04_29/output
+  --fasta-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fasta_files \
+  --genbank-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/genbank_files \
+  --bam-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/bam_files \
+  --fastq-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fastq_files \
+  --maf-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/maf_files \
+  --metadata /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS_Working_Sheet_2026_04_29.xlsx \
+  --output-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/output
 ```
 
 ## Troubleshooting
