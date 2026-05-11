@@ -14,6 +14,7 @@ Pipeline:
 """
 
 import argparse
+import hashlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -30,6 +31,16 @@ def require_tool(name):
 
 def run_command(args, stdout=None):
     subprocess.run(args, check=True, stdout=stdout)
+
+
+def sanitize_fastq_read_name(read_name):
+    text = str(read_name or "read")
+    cleaned = "".join(ch if 33 <= ord(ch) <= 126 and not ch.isspace() else "_" for ch in text)
+    cleaned = cleaned.strip("@") or "read"
+    if cleaned == text and len(cleaned) <= 240:
+        return cleaned
+    digest = hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()[:10]
+    return f"{cleaned[:229]}_{digest}"
 
 
 def inspect_bam_input(bam_path):
@@ -72,7 +83,7 @@ def bam_to_fastq(_samtools, bam_path, out_fastq):
                 if quals is not None
                 else "I" * len(seq)
             )
-            handle.write(f"@{read.query_name}\n{seq}\n+\n{qual_text}\n")
+            handle.write(f"@{sanitize_fastq_read_name(read.query_name)}\n{seq}\n+\n{qual_text}\n")
             written += 1
 
     if written == 0:
