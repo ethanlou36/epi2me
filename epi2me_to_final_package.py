@@ -101,6 +101,7 @@ def normalize_header(header: str) -> str:
 
 
 def normalize_barcode(value: str | int | None) -> str | None:
+    """Normalize WPS/EPI2ME barcode values like 3, 03, 3.0, or barcode3."""
     if value is None:
         return None
     text = str(value).strip()
@@ -327,34 +328,92 @@ def group_packaged_by_order(packaged: list[dict[str, str]]) -> dict[str, dict[st
     return grouped
 
 
-def discover_epi2me_records(epi2me_dir: Path) -> tuple[dict[str, dict[str, Path]], list[dict[str, str]]]:
-    pattern_map = {
-        "fasta": re.compile(r"^(barcode\d+)\.final\.fasta$", re.IGNORECASE),
-        "fastq": re.compile(r"^(barcode\d+)\.final\.fastq$", re.IGNORECASE),
-        "gbk": re.compile(r"^(barcode\d+)\.annotations\.gbk$", re.IGNORECASE),
-        "maf": re.compile(r"^(barcode\d+)\.assembly\.maf$", re.IGNORECASE),
-        "bam": re.compile(r"^.*(barcode\d+)(?:[^0-9].*)?\.bam$", re.IGNORECASE),
-    }
-    records: dict[str, dict[str, Path]] = defaultdict(dict)
-    discovery_errors: list[dict[str, str]] = []
-    for path in epi2me_dir.iterdir():
+def add_discovered_file(
+    records: dict[str, dict[str, Path]],
+    discovery_errors: list[dict[str, str]],
+    barcode: str,
+    key: str,
+    path: Path,
+) -> None:
+    existing = records[barcode].get(key)
+    if existing is not None:
+        discovery_errors.append(
+            {
+                "barcode": barcode,
+                "reason": f"multiple {key} files found: {existing.name}, {path.name}",
+            }
+        )
+    else:
+        records[barcode][key] = path
+
+
+def discover_files_for_key(
+    records: dict[str, dict[str, Path]],
+    discovery_errors: list[dict[str, str]],
+    key: str,
+    directory: Path,
+    pattern: re.Pattern,
+) -> None:
+    if not directory.exists():
+        raise ValueError(f"{key} directory does not exist: {directory}")
+    if not directory.is_dir():
+        raise ValueError(f"{key} path is not a directory: {directory}")
+    for path in directory.iterdir():
         if not path.is_file():
             continue
-        for key, pattern in pattern_map.items():
-            match = pattern.match(path.name)
-            if match:
-                barcode = normalize_barcode(match.group(1))
-                existing = records[barcode].get(key)
-                if existing is not None:
-                    discovery_errors.append(
-                        {
-                            "barcode": barcode,
-                            "reason": f"multiple {key} files found: {existing.name}, {path.name}",
-                        }
-                    )
-                else:
-                    records[barcode][key] = path
-                break
+        match = pattern.match(path.name)
+        if not match:
+            continue
+        barcode = normalize_barcode(match.group(1))
+        add_discovered_file(records, discovery_errors, barcode, key, path)
+
+
+def discover_input_records(
+    fasta_dir: Path,
+    genbank_dir: Path,
+    bam_dir: Path,
+    fastq_dir: Path | None = None,
+    maf_dir: Path | None = None,
+) -> tuple[dict[str, dict[str, Path]], list[dict[str, str]]]:
+    records: dict[str, dict[str, Path]] = defaultdict(dict)
+    discovery_errors: list[dict[str, str]] = []
+    discover_files_for_key(
+        records,
+        discovery_errors,
+        "fasta",
+        fasta_dir,
+        re.compile(r"^(barcode\d+)\.final\.(?:fasta|fa)$", re.IGNORECASE),
+    )
+    discover_files_for_key(
+        records,
+        discovery_errors,
+        "gbk",
+        genbank_dir,
+        re.compile(r"^(barcode\d+)\.annotations\.gbk$", re.IGNORECASE),
+    )
+    discover_files_for_key(
+        records,
+        discovery_errors,
+        "bam",
+        bam_dir,
+        re.compile(r"^.*(barcode\d+)(?:[^0-9].*)?\.bam$", re.IGNORECASE),
+    )
+    if fastq_dir is not None:
+        discover_files_for_key(
+            records,
+            discovery_errors,
+            "fastq",
+            fastq_dir,
+            re.compile(r"^(barcode\d+)\.final\.(?:fastq|fq)$", re.IGNORECASE),
+        )
+    if maf_dir is not None:
+        discover_files_for_key(
+            records,
+            discovery_errors,
+            "maf",
+            maf_dir,
+            re.compile(r"^(barcode\d+)\.assembly\.maf$", re.IGNORECASE),
+        )
     return dict(records), discovery_errors
 
 
@@ -947,9 +1006,29 @@ def package_sample(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--epi2me-dir",
-        default="Output Data from epi2me",
-        help="Directory containing EPI2ME outputs. Default: ./Output Data from epi2me",
+        "--fasta-dir",
+        required=True,
+        help="Directory containing barcodeXX.final.fasta or barcodeXX.final.fa files.",
+    )
+    parser.add_argument(
+        "--genbank-dir",
+        required=True,
+        help="Directory containing barcodeXX.annotations.gbk files.",
+    )
+    parser.add_argument(
+        "--bam-dir",
+        required=True,
+        help="Directory containing raw/unmapped BAM files with barcodeXX in each filename.",
+    )
+    parser.add_argument(
+        "--fastq-dir",
+        default=None,
+        help="Optional directory containing barcodeXX.final.fastq or barcodeXX.final.fq files.",
+    )
+    parser.add_argument(
+        "--maf-dir",
+        default=None,
+        help="Optional directory containing barcodeXX.assembly.maf files.",
     )
     parser.add_argument(
         "--metadata",
@@ -999,11 +1078,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    epi2me_dir = Path(args.epi2me_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
     metadata_path = resolve_metadata_path(Path(args.metadata).resolve())
     metadata_lookup = load_metadata_lookup(metadata_path)
-    records, discovery_errors = discover_epi2me_records(epi2me_dir)
+    input_dirs = {
+        "fasta_dir": str(Path(args.fasta_dir).resolve()),
+        "genbank_dir": str(Path(args.genbank_dir).resolve()),
+        "bam_dir": str(Path(args.bam_dir).resolve()),
+        "fastq_dir": str(Path(args.fastq_dir).resolve()) if args.fastq_dir else None,
+        "maf_dir": str(Path(args.maf_dir).resolve()) if args.maf_dir else None,
+    }
+    records, discovery_errors = discover_input_records(
+        fasta_dir=Path(args.fasta_dir).resolve(),
+        genbank_dir=Path(args.genbank_dir).resolve(),
+        bam_dir=Path(args.bam_dir).resolve(),
+        fastq_dir=Path(args.fastq_dir).resolve() if args.fastq_dir else None,
+        maf_dir=Path(args.maf_dir).resolve() if args.maf_dir else None,
+    )
 
     requested = None
     if args.barcodes:
@@ -1068,7 +1159,7 @@ def main() -> None:
     grouped_orders = group_packaged_by_order(packaged)
 
     summary = {
-        "epi2me_dir": str(epi2me_dir),
+        "input_dirs": input_dirs,
         "metadata": str(metadata_path) if metadata_path else None,
         "output_dir": str(output_dir),
         "packaged": packaged,

@@ -45,22 +45,31 @@ bioinformatics command-line tools.
 
 ## 2. Prepare the Input Folder
 
-Start with the EPI2ME output files for a sequencing run. Put them in one folder,
-for example:
+Start with the EPI2ME output files for a sequencing run. The FASTA, GenBank,
+BAM, FASTQ, and MAF files do not need to be in the same folder. A clean layout
+looks like this:
 
 ```text
 C:\WPS_Runs\Run_2026_04_29\
-  epi2me_export\
+  fasta_files\
     barcode01.final.fasta
-    barcode01.annotations.gbk
-    FBD...barcode01...bam
-    barcode01.final.fastq          optional
-    barcode01.assembly.maf         optional
-
     barcode02.final.fasta
+
+  genbank_files\
+    barcode01.annotations.gbk
     barcode02.annotations.gbk
+
+  bam_files\
+    FBD...barcode01...bam
     FBD...barcode02...bam
-    ...
+
+  fastq_files\                  optional
+    barcode01.final.fastq
+    barcode02.final.fastq
+
+  maf_files\                    optional
+    barcode01.assembly.maf
+    barcode02.assembly.maf
 
   WPS_Working_Sheet_2026_04_29.xlsx
 ```
@@ -78,6 +87,8 @@ Optional files:
 
 The metadata sheet must contain the same barcode numbers as the data files. For
 example, a row with `Barcode #` equal to `1` matches `barcode01`.
+The barcode does not need leading zeroes in the sheet: `3`, `03`, `3.0`, and
+`barcode3` all match files named `barcode03...`.
 
 You do not need to rename the metadata file. The report command takes the exact
 metadata path with `--metadata`.
@@ -96,7 +107,9 @@ Run the report generator:
 
 ```bat
 python epi2me_to_final_package.py ^
-  --epi2me-dir "C:\WPS_Runs\Run_2026_04_29\epi2me_export" ^
+  --fasta-dir "C:\WPS_Runs\Run_2026_04_29\fasta_files" ^
+  --genbank-dir "C:\WPS_Runs\Run_2026_04_29\genbank_files" ^
+  --bam-dir "C:\WPS_Runs\Run_2026_04_29\bam_files" ^
   --metadata "C:\WPS_Runs\Run_2026_04_29\WPS_Working_Sheet_2026_04_29.xlsx" ^
   --output-dir "C:\WPS_Runs\Run_2026_04_29\output"
 ```
@@ -105,7 +118,9 @@ For faster alignment on a larger run, use more threads:
 
 ```bat
 python epi2me_to_final_package.py ^
-  --epi2me-dir "C:\WPS_Runs\Run_2026_04_29\epi2me_export" ^
+  --fasta-dir "C:\WPS_Runs\Run_2026_04_29\fasta_files" ^
+  --genbank-dir "C:\WPS_Runs\Run_2026_04_29\genbank_files" ^
+  --bam-dir "C:\WPS_Runs\Run_2026_04_29\bam_files" ^
   --metadata "C:\WPS_Runs\Run_2026_04_29\WPS_Working_Sheet_2026_04_29.xlsx" ^
   --output-dir "C:\WPS_Runs\Run_2026_04_29\output" ^
   --threads 4 ^
@@ -116,13 +131,37 @@ The metadata file can also be a CSV or TSV if it has the expected columns:
 
 ```bat
 python epi2me_to_final_package.py ^
-  --epi2me-dir "C:\WPS_Runs\Run_2026_04_29\epi2me_export" ^
+  --fasta-dir "C:\WPS_Runs\Run_2026_04_29\fasta_files" ^
+  --genbank-dir "C:\WPS_Runs\Run_2026_04_29\genbank_files" ^
+  --bam-dir "C:\WPS_Runs\Run_2026_04_29\bam_files" ^
   --metadata "C:\WPS_Runs\Run_2026_04_29\metadata.csv" ^
   --output-dir "C:\WPS_Runs\Run_2026_04_29\output"
 ```
 
 PowerShell users can run the same command on one line, or use backticks instead
 of `^` for line continuation.
+
+Example command with every supported option:
+
+```bat
+python epi2me_to_final_package.py ^
+  --fasta-dir "C:\WPS_Runs\Run_2026_04_29\fasta_files" ^
+  --genbank-dir "C:\WPS_Runs\Run_2026_04_29\genbank_files" ^
+  --bam-dir "C:\WPS_Runs\Run_2026_04_29\bam_files" ^
+  --fastq-dir "C:\WPS_Runs\Run_2026_04_29\fastq_files" ^
+  --maf-dir "C:\WPS_Runs\Run_2026_04_29\maf_files" ^
+  --metadata "C:\WPS_Runs\Run_2026_04_29\WPS_Working_Sheet_2026_04_29.xlsx" ^
+  --output-dir "C:\WPS_Runs\Run_2026_04_29\output" ^
+  --barcodes barcode01 barcode02 ^
+  --logo "C:\WPS_Runs\alta_logo.png" ^
+  --threads 4 ^
+  --sort-memory 1G ^
+  --keep-intermediates ^
+  --allow-aligned-input
+```
+
+Most runs should not use `--keep-intermediates` or `--allow-aligned-input`.
+Those are debugging/override options.
 
 ## 4. Find the Finished Reports
 
@@ -152,7 +191,11 @@ This repository includes a small `barcode01` example. From this code folder:
 
 ```bat
 python epi2me_to_final_package.py ^
-  --epi2me-dir "example_data\epi2me_export" ^
+  --fasta-dir "example_data\epi2me_export" ^
+  --genbank-dir "example_data\epi2me_export" ^
+  --bam-dir "example_data\epi2me_export" ^
+  --fastq-dir "example_data\epi2me_export" ^
+  --maf-dir "example_data\epi2me_export" ^
   --metadata "example_data\barcode01_wps_working_sheet.csv" ^
   --output-dir "example_data\output"
 ```
@@ -201,7 +244,11 @@ appears in WSL as:
 ```bash
 cd /mnt/c/Users/YourName/final_epi2me
 python3 epi2me_to_final_package.py \
-  --epi2me-dir /mnt/c/WPS_Runs/Run_2026_04_29/epi2me_export \
+  --fasta-dir /mnt/c/WPS_Runs/Run_2026_04_29/fasta_files \
+  --genbank-dir /mnt/c/WPS_Runs/Run_2026_04_29/genbank_files \
+  --bam-dir /mnt/c/WPS_Runs/Run_2026_04_29/bam_files \
+  --fastq-dir /mnt/c/WPS_Runs/Run_2026_04_29/fastq_files \
+  --maf-dir /mnt/c/WPS_Runs/Run_2026_04_29/maf_files \
   --metadata /mnt/c/WPS_Runs/Run_2026_04_29/WPS_Working_Sheet_2026_04_29.xlsx \
   --output-dir /mnt/c/WPS_Runs/Run_2026_04_29/output
 ```
