@@ -100,6 +100,7 @@ THEME = {
 LOW_CONFIDENCE_QSCORE = 12
 SIZE_MISMATCH_TOLERANCE_FRACTION = 0.10
 SIZE_MISMATCH_TOLERANCE_BP = 100
+INPUT_ROOT = Path("/mnt/c/WPS data")
 
 
 def slugify(value: str) -> str:
@@ -1028,6 +1029,18 @@ def collect_logos(paths: Iterable[str]) -> list[Path]:
     return logos
 
 
+def resolve_input_dir_from_folder_name(folder_name: str) -> Path:
+    text = folder_name.strip()
+    folder = Path(text)
+    if not text or folder.is_absolute() or len(folder.parts) != 1 or "\\" in text:
+        raise ValueError(
+            f"--folder-name must be one folder name under {INPUT_ROOT}, not a full path"
+        )
+    if folder.parts[0] in {".", ".."}:
+        raise ValueError(f"--folder-name must name a real folder under {INPUT_ROOT}")
+    return (INPUT_ROOT / folder.parts[0]).resolve()
+
+
 def path_is_inside(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -1237,34 +1250,14 @@ def package_sample(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--fasta-dir",
+        "--folder-name",
         required=True,
-        help="Directory containing barcodeXX.final.fasta or barcodeXX.final.fa files.",
-    )
-    parser.add_argument(
-        "--genbank-dir",
-        required=True,
-        help="Directory containing barcodeXX.annotations.gbk files.",
-    )
-    parser.add_argument(
-        "--bam-dir",
-        required=True,
-        help="Directory containing raw/unmapped BAM files. BAMs may be directly inside it or inside barcodeXX subfolders.",
-    )
-    parser.add_argument(
-        "--fastq-dir",
-        default=None,
-        help="Optional directory containing barcodeXX.final.fastq or barcodeXX.final.fq files.",
-    )
-    parser.add_argument(
-        "--maf-dir",
-        default=None,
-        help="Optional directory containing barcodeXX.assembly.maf files.",
-    )
-    parser.add_argument(
-        "--metadata",
-        required=True,
-        help="Required metadata CSV, TSV, XLSX, or directory containing exactly one metadata file.",
+        help=(
+            f"Name of the folder under {INPUT_ROOT} containing all run inputs: "
+            "barcodeXX.final.fasta/fa, barcodeXX.annotations.gbk, raw/unmapped BAMs, "
+            "optional FASTQ/MAF files, and exactly one metadata CSV, TSV, or XLSX file. "
+            "BAMs may be directly inside it or inside barcodeXX subfolders."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -1319,22 +1312,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    folder_name = args.folder_name.strip()
+    input_dir = resolve_input_dir_from_folder_name(folder_name)
+    if not input_dir.exists():
+        raise ValueError(f"input directory does not exist: {input_dir}")
+    if not input_dir.is_dir():
+        raise ValueError(f"input path is not a directory: {input_dir}")
+
     output_dir = Path(args.output_dir).resolve()
-    metadata_path = resolve_metadata_path(Path(args.metadata).resolve())
+    metadata_path = resolve_metadata_path(input_dir)
     metadata_lookup = load_metadata_lookup(metadata_path)
-    input_dirs = {
-        "fasta_dir": str(Path(args.fasta_dir).resolve()),
-        "genbank_dir": str(Path(args.genbank_dir).resolve()),
-        "bam_dir": str(Path(args.bam_dir).resolve()),
-        "fastq_dir": str(Path(args.fastq_dir).resolve()) if args.fastq_dir else None,
-        "maf_dir": str(Path(args.maf_dir).resolve()) if args.maf_dir else None,
-    }
     records, discovery_errors = discover_input_records(
-        fasta_dir=Path(args.fasta_dir).resolve(),
-        genbank_dir=Path(args.genbank_dir).resolve(),
-        bam_dir=Path(args.bam_dir).resolve(),
-        fastq_dir=Path(args.fastq_dir).resolve() if args.fastq_dir else None,
-        maf_dir=Path(args.maf_dir).resolve() if args.maf_dir else None,
+        fasta_dir=input_dir,
+        genbank_dir=input_dir,
+        bam_dir=input_dir,
+        fastq_dir=input_dir,
+        maf_dir=input_dir,
     )
 
     requested = None
@@ -1401,7 +1394,9 @@ def main() -> None:
     grouped_orders = group_packaged_by_order(packaged)
 
     summary = {
-        "input_dirs": input_dirs,
+        "folder_name": folder_name,
+        "input_root": str(INPUT_ROOT),
+        "input_dir": str(input_dir),
         "metadata": str(metadata_path) if metadata_path else None,
         "multimer_denominator": args.multimer_denominator,
         "output_dir": str(output_dir),

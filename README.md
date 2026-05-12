@@ -75,42 +75,37 @@ Rules:
 - Wrap paths in quotes if they contain spaces
 - Do not use raw `C:\...` paths inside Ubuntu commands
 
-Example:
+The report command assumes all input run folders live under:
 
-```bash
---metadata "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS Working Sheet.xlsx"
+```text
+/mnt/c/WPS data/
+```
+
+That is the Ubuntu path for:
+
+```text
+C:\WPS data\
 ```
 
 ## 3. Prepare the Input Folder
 
-Start with the EPI2ME output files for a sequencing run. The FASTA, GenBank,
-BAM, FASTQ, and MAF files do not need to be in the same folder. A clean layout
-looks like this:
+Start with the EPI2ME output files for a sequencing run. Put the FASTA,
+GenBank, BAM, metadata, and any optional FASTQ/MAF files in one folder under
+`C:\WPS data\`. A clean layout looks like this:
 
 ```text
-C:\WPS_Runs\Run_2026_04_29\
-  fasta_files\
-    barcode01.final.fasta
-    barcode02.final.fasta
-
-  genbank_files\
-    barcode01.annotations.gbk
-    barcode02.annotations.gbk
-
-  bam_files\
-    barcode01\
-      FBD...bam
-    barcode02\
-      FBD...bam
-
-  fastq_files\                  optional
-    barcode01.final.fastq
-    barcode02.final.fastq
-
-  maf_files\                    optional
-    barcode01.assembly.maf
-    barcode02.assembly.maf
-
+C:\WPS data\Run_2026_04_29\
+  barcode01.final.fasta
+  barcode02.final.fasta
+  barcode01.annotations.gbk
+  barcode02.annotations.gbk
+  FBD...barcode01...bam
+  barcode02\
+    FBD...bam
+  barcode01.final.fastq         optional
+  barcode02.final.fastq         optional
+  barcode01.assembly.maf        optional
+  barcode02.assembly.maf        optional
   WPS_Working_Sheet_2026_04_29.xlsx
 ```
 
@@ -118,8 +113,9 @@ Each barcode must have:
 
 - `barcodeXX.final.fasta`
 - `barcodeXX.annotations.gbk`
-- one raw/unmapped `.bam` file. The BAM can either have the barcode in the
-  filename, or it can be inside a barcode folder such as `bam_files\barcode01\`.
+- one raw/unmapped `.bam` file whose filename contains the barcode, such as
+  `FBD...barcode01...bam`, or one raw/unmapped `.bam` file inside a barcode
+  folder such as `barcode02\FBD...bam`.
 
 Optional files:
 
@@ -131,8 +127,8 @@ example, a row with `Barcode #` equal to `1` matches `barcode01`.
 The barcode does not need leading zeroes in the sheet: `3`, `03`, `3.0`, and
 `barcode3` all match files named `barcode03...`.
 
-You do not need to rename the metadata file. The report command takes the exact
-metadata path with `--metadata`.
+You do not need to rename the metadata file. The input folder must contain
+exactly one metadata `.xlsx`, `.csv`, or `.tsv` file.
 
 ## 4. Run the Report Generator
 
@@ -143,28 +139,23 @@ cd /mnt/c/Users/altab/epi2me
 source .venv/bin/activate
 ```
 
-Minimum command using only the required input folders, metadata, and barcode filter:
+Minimum command using the folder name and barcode filter:
 
 ```bash
 python epi2me_to_final_package.py \
-  --fasta-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fasta_files" \
-  --genbank-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/genbank_files" \
-  --bam-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/bam_files" \
-  --metadata "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS Working Sheet.xlsx" \
+  --folder-name "Run_2026_04_29" \
   --barcodes 1 2
 ```
 
-Then run the fuller report command if you also have optional FASTQ/MAF files or want to choose an output folder. This example processes barcode 1 and barcode 2:
+Then run the fuller report command if you want to choose an output folder or
+alignment settings. Optional FASTQ/MAF files are discovered from the same input
+folder under `C:\WPS data\` when they are present. This example processes
+barcode 1 and barcode 2:
 
 ```bash
 python epi2me_to_final_package.py \
-  --fasta-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fasta_files" \
-  --genbank-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/genbank_files" \
-  --bam-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/bam_files" \
-  --fastq-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fastq_files" \
-  --maf-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/maf_files" \
-  --metadata "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS Working Sheet.xlsx" \
-  --output-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/output" \
+  --folder-name "Run_2026_04_29" \
+  --output-dir "/mnt/c/WPS data/Run_2026_04_29/output" \
   --barcodes 1 2 \
   --threads 4 \
   --sort-memory 1G
@@ -173,9 +164,7 @@ python epi2me_to_final_package.py \
 What the command parts mean:
 
 - `python epi2me_to_final_package.py` starts the report generator.
-- `--fasta-dir`, `--genbank-dir`, and `--bam-dir` point to required input folders.
-- `--fastq-dir` and `--maf-dir` are optional, but include them when those files exist.
-- `--metadata` points to the WPS working sheet Excel/CSV/TSV file.
+- `--folder-name` names the folder under `/mnt/c/WPS data/` containing all run input files.
 - `--output-dir` is where the finished customer package will be written.
 - `--barcodes 1 2` limits the run to barcode01 and barcode02. Omit this option to process every barcode found.
 - `--multimer-denominator classified-reads` reports monomer/dimer/trimer/tetramer percentages only among reads that were close enough to 1x/2x/3x/4x plasmid length to classify. This is the default.
@@ -195,7 +184,7 @@ Those are debugging/override options.
 After the run, look inside the output folder:
 
 ```text
-C:\WPS_Runs\Run_2026_04_29\output\
+C:\WPS data\Run_2026_04_29\output\
   WPS Data_Order #145011068\
     QC REPORTS\
       001_A39569_MYO2A-KAN_report.pdf
@@ -216,14 +205,11 @@ skipped. Always check it after a run.
 
 This repository includes a small `barcode01` example. From this code folder:
 
+Copy or place the example folder at `C:\WPS data\epi2me_export`, then run:
+
 ```bash
 python epi2me_to_final_package.py \
-  --fasta-dir "example_data/epi2me_export" \
-  --genbank-dir "example_data/epi2me_export" \
-  --bam-dir "example_data/epi2me_export" \
-  --fastq-dir "example_data/epi2me_export" \
-  --maf-dir "example_data/epi2me_export" \
-  --metadata "example_data/barcode01_wps_working_sheet.csv" \
+  --folder-name "epi2me_export" \
   --output-dir "example_data/output"
 ```
 
@@ -233,9 +219,9 @@ The example report will appear under:
 example_data\output\WPS Data_Order #145011068\QC REPORTS\
 ```
 
-## macOS Option
+## macOS Development Option
 
-If you are using a Mac, do not use WSL. Use Conda or Homebrew.
+If you are testing or developing on a Mac, use Conda or Homebrew.
 
 Conda is the most self-contained option:
 
@@ -255,17 +241,13 @@ The `brew install` or `conda create` command installs `minimap2` and
 `samtools`. The `python3 -m pip install ...` command only installs Python
 packages.
 
-Run the script on macOS with Unix-style paths:
+Routine report runs are configured for the WSL input root `/mnt/c/WPS data/`.
+For those runs, use Ubuntu/WSL and pass only the folder name:
 
 ```bash
 python3 epi2me_to_final_package.py \
-  --fasta-dir /Users/yourname/WPS_Runs/Run_2026_04_29/fasta_files \
-  --genbank-dir /Users/yourname/WPS_Runs/Run_2026_04_29/genbank_files \
-  --bam-dir /Users/yourname/WPS_Runs/Run_2026_04_29/bam_files \
-  --fastq-dir /Users/yourname/WPS_Runs/Run_2026_04_29/fastq_files \
-  --maf-dir /Users/yourname/WPS_Runs/Run_2026_04_29/maf_files \
-  --metadata /Users/yourname/WPS_Runs/Run_2026_04_29/WPS_Working_Sheet_2026_04_29.xlsx \
-  --output-dir /Users/yourname/WPS_Runs/Run_2026_04_29/output \
+  --folder-name "Run_2026_04_29" \
+  --output-dir "/mnt/c/WPS data/Run_2026_04_29/output" \
   --threads 4 \
   --sort-memory 1G
 ```
