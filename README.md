@@ -93,31 +93,25 @@ The barcode does not need leading zeroes in the sheet: `3`, `03`, `3.0`, and
 You do not need to rename the metadata file. The input folder must contain
 exactly one metadata `.xlsx`, `.csv`, or `.tsv` file.
 
-## 4. Run the Report Generator
+## 4. Run Report
 
-In Ubuntu, make sure you are in the project folder and `.venv` is active:
+Example command:
 
 ```bash
-cd /mnt/c/Users/altab/plasmid_report
-git pull
-source .venv/bin/activate
+python3 epi2me_to_final_package.py \
+  --folder-name "Run_2026_04_29"
 ```
 
-Minimum command using the folder name and barcode filter:
+This processes every barcode found in `C:\WPS data\Run_2026_04_29\` and writes
+the output to `C:\WPS data\Run_2026_04_29\output\`.
+
+### Optional Commands
+
+Use these options only when you need to choose specific barcodes, change the
+output folder, or adjust alignment settings:
 
 ```bash
-python epi2me_to_final_package.py \
-  --folder-name "Run_2026_04_29" \
-  --barcodes 1 2
-```
-
-Then run the fuller report command if you want to choose an output folder or
-alignment settings. Optional FASTQ/MAF files are discovered from the same input
-folder under `C:\WPS data\` when they are present. This example processes
-barcode 1 and barcode 2:
-
-```bash
-python epi2me_to_final_package.py \
+python3 epi2me_to_final_package.py \
   --folder-name "Run_2026_04_29" \
   --output-dir "/mnt/c/WPS data/Run_2026_04_29/output" \
   --barcodes 1 2 \
@@ -125,9 +119,6 @@ python epi2me_to_final_package.py \
   --sort-memory 1G
 ```
 
-What the command parts mean:
-
-- `python epi2me_to_final_package.py` starts the report generator.
 - `--folder-name` names the folder under `/mnt/c/WPS data/` containing all run input files.
 - `--output-dir` is where the finished customer package will be written. If
   omitted, the output goes into `C:\WPS data\<folder-name>\output\`.
@@ -145,90 +136,6 @@ same folder will not treat generated alignment files as new input BAMs.
 
 Most runs should not use `--keep-intermediates` or `--allow-aligned-input`.
 Those are debugging/override options.
-
-## 5. Find the Finished Reports
-
-After the run, look inside the output folder:
-
-```text
-C:\WPS data\Run_2026_04_29\output\
-  WPS Data_Order #145011068\
-    QC REPORTS\
-      001_A39569_MYO2A-KAN_report.pdf
-    FASTA_FILES\
-    GENBANK_FILES\
-    CHROMATOGRAM_FILES_ab1\
-    PER_BASE_BREAKDOWN\
-
-  run_summary.json
-```
-
-Open the PDF files in `QC REPORTS`.
-
-`run_summary.json` tells you which barcodes were packaged and which were
-skipped. Always check it after a run.
-
-## 6. Try the Included Example
-
-This repository includes a small `barcode01` example. From this code folder:
-
-Copy or place the example folder at `C:\WPS data\epi2me_export`, then run:
-
-```bash
-python epi2me_to_final_package.py \
-  --folder-name "epi2me_export" \
-  --output-dir "example_data/output"
-```
-
-The example report will appear under:
-
-```text
-example_data\output\WPS Data_Order #145011068\QC REPORTS\
-```
-
-## macOS Development Option
-
-If you are testing or developing on a Mac, use Conda or Homebrew.
-
-Conda is the most self-contained option:
-
-```bash
-conda create -n wps-report -c conda-forge -c bioconda python=3.11 pysam numpy matplotlib minimap2 samtools
-conda activate wps-report
-```
-
-Homebrew also works:
-
-```bash
-brew install python minimap2 samtools
-python3 -m pip install pysam numpy matplotlib
-```
-
-The `brew install` or `conda create` command installs `minimap2` and
-`samtools`. The `python3 -m pip install ...` command only installs Python
-packages.
-
-Routine report runs are configured for the WSL input root `/mnt/c/WPS data/`.
-For those runs, use Ubuntu/WSL and pass only the folder name:
-
-```bash
-python3 epi2me_to_final_package.py \
-  --folder-name "Run_2026_04_29" \
-  --output-dir "/mnt/c/WPS data/Run_2026_04_29/output" \
-  --threads 4 \
-  --sort-memory 1G
-```
-
-## Installing Ubuntu/WSL
-
-If Ubuntu is not installed yet, install WSL from PowerShell as Administrator:
-
-```powershell
-wsl --install
-```
-
-Then open **Ubuntu** from the Start menu and follow the main instructions at the
-top of this README.
 
 ## Troubleshooting
 
@@ -256,12 +163,3 @@ add:
 ```
 
 Use that only when you are sure the BAM is supposed to be realigned.
-
-## Files in This Folder
-
-- `epi2me_to_final_package.py`: main command to run
-- `align_bam_pipeline.py`: converts raw BAM reads to FASTQ and aligns them
-- `bam_to_per_base_data.py`: creates per-base support CSVs
-- `generate_report.py`: computes QC metrics and plots
-- `fastq_to_ab1.py`: creates one synthetic AB1 chromatogram per sample
-- `example_data\`: small test data and example metadata
