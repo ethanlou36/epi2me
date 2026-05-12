@@ -14,27 +14,11 @@ in the Ubuntu terminal, not in PowerShell, Command Prompt, or Anaconda Prompt.
 
 1. Open **Ubuntu** from the Windows Start menu.
 
-2. Move into the project folder:
+2. Copy and paste this command block:
 
 ```bash
 cd /mnt/c/Users/altab/plasmid_report
-```
-
-That Ubuntu path points to this Windows folder:
-
-```text
-C:\Users\altab\plasmid_report
-```
-
-3. Pull the latest code before each run:
-
-```bash
 git pull
-```
-
-4. Activate the Python virtual environment named `.venv`:
-
-```bash
 source .venv/bin/activate
 ```
 
@@ -58,39 +42,12 @@ source .venv/bin/activate
 python -m pip install pysam numpy matplotlib
 ```
 
-## 2. Understand Windows Paths in Ubuntu
-
-Ubuntu can read files from the Windows `C:` drive, but the path looks different.
-
-Windows path:
-
-```text
-C:\Users\altab\plasmid_report\runs\Run_2026_04_29
-```
-
-Ubuntu path:
-
-```text
-/mnt/c/Users/altab/plasmid_report/runs/Run_2026_04_29
-```
-
-Rules:
-
-- `C:\` becomes `/mnt/c/`
-- Backslashes `\` become forward slashes `/`
-- Wrap paths in quotes if they contain spaces
-- Do not use raw `C:\...` paths inside Ubuntu commands
+## 2. Input Folder Location
 
 The report command assumes all input run folders live under:
 
 ```text
 /mnt/c/WPS data/
-```
-
-That is the Ubuntu path for:
-
-```text
-C:\WPS data\
 ```
 
 ## 3. Prepare the Input Folder
