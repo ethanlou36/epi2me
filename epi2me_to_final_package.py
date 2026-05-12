@@ -61,7 +61,6 @@ HEADER_ALIASES = {
     "sample_id": {"id", "sampleidentifier", "samplecode"},
     "order_number": {"ordernumber", "order", "orderno", "ordernum"},
     "serial_number": {"sn", "serialnumber", "samplenumber", "sample_no"},
-    "lot_number": {"lot", "lotnumber", "lotno"},
     "order_date": {"orderdate", "dateordered"},
     "report_date": {"reportdate"},
     "run_date": {"rundate", "sequencingdate"},
@@ -816,14 +815,13 @@ def render_pdf_report(
         draw_table(
             fig,
             [0.07, 0.69, 0.86, 0.08],
-            ["Sample Name", "Lot Number", "Order\nNumber", "Report\nDate"],
+            ["Sample Name", "Order\nNumber", "Report\nDate"],
             [
                 metadata.get("sample_name") or sample_stem,
-                metadata.get("lot_number", ""),
                 metadata.get("order_number", "UNKNOWN"),
                 report_date_value(metadata),
             ],
-            col_widths=[0.40, 0.18, 0.21, 0.21],
+            col_widths=[0.50, 0.25, 0.25],
         )
 
         draw_section_heading(fig, 0.615, "Assembly Summary")
