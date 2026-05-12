@@ -7,44 +7,81 @@ If several samples have the same `Order #` in the metadata sheet, their reports
 go into the same `WPS Data_Order #...` folder. Samples with different order
 numbers go into separate folders.
 
-The main examples below are for Windows because that is the most common
-operator setup. A macOS section is included after the Windows commands.
+The main instructions below are for Windows using Ubuntu/WSL. Run the commands
+in the Ubuntu terminal, not in PowerShell, Command Prompt, or Anaconda Prompt.
 
-## 1. Install Required Software
+## 1. Open Ubuntu and Activate Python
 
-The easiest Windows setup is Miniconda or Anaconda. It installs Python and the
-bioinformatics tools in one environment.
+1. Open **Ubuntu** from the Windows Start menu.
 
-1. Install Miniconda for Windows:
-   <https://docs.conda.io/en/latest/miniconda.html>
+2. Move into the project folder:
 
-2. Open **Anaconda Prompt** from the Start menu.
-
-3. Create the environment:
-
-```bat
-conda create -n wps-report -c conda-forge -c bioconda python=3.11 pysam numpy matplotlib minimap2 samtools
+```bash
+cd /mnt/c/Users/altab/epi2me
 ```
 
-4. Activate it:
+That Ubuntu path points to this Windows folder:
 
-```bat
-conda activate wps-report
+```text
+C:\Users\altab\epi2me
 ```
 
-5. Check that everything is available:
+3. Activate the Python virtual environment named `.venv`:
 
-```bat
+```bash
+source .venv/bin/activate
+```
+
+After activation, the prompt should usually show `(.venv)` at the beginning.
+While `.venv` is active, use `python`, not `python3`, to run the script:
+
+```bash
 python --version
 minimap2 --version
 samtools --version
 ```
 
-If `minimap2` or `samtools` does not work on native Windows, use the WSL option
-near the bottom of this README. WSL is Windows-only. On macOS, use the macOS
-section below.
+If `source .venv/bin/activate` says the file does not exist, the environment
+has not been set up in this folder yet. Set it up once with:
 
-## 2. Prepare the Input Folder
+```bash
+sudo apt update
+sudo apt install python3 python3-venv python3-pip minimap2 samtools
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install pysam numpy matplotlib
+```
+
+## 2. Understand Windows Paths in Ubuntu
+
+Ubuntu can read files from the Windows `C:` drive, but the path looks different.
+
+Windows path:
+
+```text
+C:\Users\altab\epi2me\runs\Run_2026_04_29
+```
+
+Ubuntu path:
+
+```text
+/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29
+```
+
+Rules:
+
+- `C:\` becomes `/mnt/c/`
+- Backslashes `\` become forward slashes `/`
+- Wrap paths in quotes if they contain spaces
+- Do not use raw `C:\...` paths inside Ubuntu commands
+
+Example:
+
+```bash
+--metadata "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS Working Sheet.xlsx"
+```
+
+## 3. Prepare the Input Folder
 
 Start with the EPI2ME output files for a sequencing run. The FASTA, GenBank,
 BAM, FASTQ, and MAF files do not need to be in the same folder. A clean layout
@@ -97,77 +134,46 @@ The barcode does not need leading zeroes in the sheet: `3`, `03`, `3.0`, and
 You do not need to rename the metadata file. The report command takes the exact
 metadata path with `--metadata`.
 
-## 3. Run the Report Generator on Windows
+## 4. Run the Report Generator
 
-Open **Anaconda Prompt**.
+In Ubuntu, make sure you are in the project folder and `.venv` is active:
 
-Move into this code folder. Example:
-
-```bat
-cd C:\Users\YourName\final_epi2me
+```bash
+cd /mnt/c/Users/altab/epi2me
+source .venv/bin/activate
 ```
 
-Run the report generator:
+Then run the report command. This example processes barcode 1 and barcode 2:
 
-```bat
-python epi2me_to_final_package.py ^
-  --fasta-dir "C:\WPS_Runs\Run_2026_04_29\fasta_files" ^
-  --genbank-dir "C:\WPS_Runs\Run_2026_04_29\genbank_files" ^
-  --bam-dir "C:\WPS_Runs\Run_2026_04_29\bam_files" ^
-  --metadata "C:\WPS_Runs\Run_2026_04_29\WPS_Working_Sheet_2026_04_29.xlsx" ^
-  --output-dir "C:\WPS_Runs\Run_2026_04_29\output"
-```
-
-For faster alignment on a larger run, use more threads:
-
-```bat
-python epi2me_to_final_package.py ^
-  --fasta-dir "C:\WPS_Runs\Run_2026_04_29\fasta_files" ^
-  --genbank-dir "C:\WPS_Runs\Run_2026_04_29\genbank_files" ^
-  --bam-dir "C:\WPS_Runs\Run_2026_04_29\bam_files" ^
-  --metadata "C:\WPS_Runs\Run_2026_04_29\WPS_Working_Sheet_2026_04_29.xlsx" ^
-  --output-dir "C:\WPS_Runs\Run_2026_04_29\output" ^
-  --threads 4 ^
+```bash
+python epi2me_to_final_package.py \
+  --fasta-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fasta_files" \
+  --genbank-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/genbank_files" \
+  --bam-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/bam_files" \
+  --fastq-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fastq_files" \
+  --maf-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/maf_files" \
+  --metadata "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS Working Sheet.xlsx" \
+  --output-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/output" \
+  --barcodes 1 2 \
+  --threads 4 \
   --sort-memory 1G
 ```
 
-The metadata file can also be a CSV or TSV if it has the expected columns:
+What the command parts mean:
 
-```bat
-python epi2me_to_final_package.py ^
-  --fasta-dir "C:\WPS_Runs\Run_2026_04_29\fasta_files" ^
-  --genbank-dir "C:\WPS_Runs\Run_2026_04_29\genbank_files" ^
-  --bam-dir "C:\WPS_Runs\Run_2026_04_29\bam_files" ^
-  --metadata "C:\WPS_Runs\Run_2026_04_29\metadata.csv" ^
-  --output-dir "C:\WPS_Runs\Run_2026_04_29\output"
-```
-
-PowerShell users can run the same command on one line, or use backticks instead
-of `^` for line continuation.
-
-Example command with every supported option:
-
-```bat
-python epi2me_to_final_package.py ^
-  --fasta-dir "C:\WPS_Runs\Run_2026_04_29\fasta_files" ^
-  --genbank-dir "C:\WPS_Runs\Run_2026_04_29\genbank_files" ^
-  --bam-dir "C:\WPS_Runs\Run_2026_04_29\bam_files" ^
-  --fastq-dir "C:\WPS_Runs\Run_2026_04_29\fastq_files" ^
-  --maf-dir "C:\WPS_Runs\Run_2026_04_29\maf_files" ^
-  --metadata "C:\WPS_Runs\Run_2026_04_29\WPS_Working_Sheet_2026_04_29.xlsx" ^
-  --output-dir "C:\WPS_Runs\Run_2026_04_29\output" ^
-  --barcodes barcode01 barcode02 ^
-  --logo "C:\WPS_Runs\alta_logo.png" ^
-  --threads 4 ^
-  --sort-memory 1G ^
-  --keep-intermediates ^
-  --allow-aligned-input
-```
+- `python epi2me_to_final_package.py` starts the report generator.
+- `--fasta-dir`, `--genbank-dir`, and `--bam-dir` point to required input folders.
+- `--fastq-dir` and `--maf-dir` are optional, but include them when those files exist.
+- `--metadata` points to the WPS working sheet Excel/CSV/TSV file.
+- `--output-dir` is where the finished customer package will be written.
+- `--barcodes 1 2` limits the run to barcode01 and barcode02. Omit this option to process every barcode found.
+- `--threads 4` makes alignment faster.
+- `--sort-memory 1G` gives `samtools sort` more memory.
 
 Most runs should not use `--keep-intermediates` or `--allow-aligned-input`.
 Those are debugging/override options.
 
-## 4. Find the Finished Reports
+## 5. Find the Finished Reports
 
 After the run, look inside the output folder:
 
@@ -189,19 +195,19 @@ Open the PDF files in `QC REPORTS`.
 `run_summary.json` tells you which barcodes were packaged and which were
 skipped. Always check it after a run.
 
-## 5. Try the Included Example
+## 6. Try the Included Example
 
 This repository includes a small `barcode01` example. From this code folder:
 
-```bat
-python epi2me_to_final_package.py ^
-  --fasta-dir "example_data\epi2me_export" ^
-  --genbank-dir "example_data\epi2me_export" ^
-  --bam-dir "example_data\epi2me_export" ^
-  --fastq-dir "example_data\epi2me_export" ^
-  --maf-dir "example_data\epi2me_export" ^
-  --metadata "example_data\barcode01_wps_working_sheet.csv" ^
-  --output-dir "example_data\output"
+```bash
+python epi2me_to_final_package.py \
+  --fasta-dir "example_data/epi2me_export" \
+  --genbank-dir "example_data/epi2me_export" \
+  --bam-dir "example_data/epi2me_export" \
+  --fastq-dir "example_data/epi2me_export" \
+  --maf-dir "example_data/epi2me_export" \
+  --metadata "example_data/barcode01_wps_working_sheet.csv" \
+  --output-dir "example_data/output"
 ```
 
 The example report will appear under:
@@ -247,54 +253,16 @@ python3 epi2me_to_final_package.py \
   --sort-memory 1G
 ```
 
-## WSL Option
+## Installing Ubuntu/WSL
 
-WSL is only for Windows. If native Windows has trouble installing or running
-`minimap2` or `samtools`, use Windows Subsystem for Linux.
-
-1. Install WSL from PowerShell as Administrator:
+If Ubuntu is not installed yet, install WSL from PowerShell as Administrator:
 
 ```powershell
 wsl --install
 ```
 
-2. Open **Ubuntu** from the Start menu. Run the rest of the WSL commands in
-   the Ubuntu terminal, not in PowerShell or Anaconda Prompt.
-
-3. Install dependencies. `apt` installs `minimap2` and `samtools`; `pip`
-   installs the Python packages.
-
-```bash
-sudo apt update
-sudo apt install python3 python3-pip minimap2 samtools
-python3 -m pip install pysam numpy matplotlib
-```
-
-4. Go to the project folder from WSL. For the Alta workstation, use:
-
-```text
-/mnt/c/Users/altab/epi2me
-```
-
-That path points to this Windows folder:
-
-```text
-C:\Users\altab\epi2me
-```
-
-5. Run the script:
-
-```bash
-cd /mnt/c/Users/altab/epi2me
-python3 epi2me_to_final_package.py \
-  --fasta-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fasta_files \
-  --genbank-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/genbank_files \
-  --bam-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/bam_files \
-  --fastq-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fastq_files \
-  --maf-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/maf_files \
-  --metadata /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS_Working_Sheet_2026_04_29.xlsx \
-  --output-dir /mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/output
-```
+Then open **Ubuntu** from the Start menu and follow the main instructions at the
+top of this README.
 
 ## Troubleshooting
 
