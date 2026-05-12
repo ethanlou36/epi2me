@@ -155,7 +155,6 @@ python epi2me_to_final_package.py \
   --metadata "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS Working Sheet.xlsx" \
   --output-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/output" \
   --barcodes 1 2 \
-  --multimer-denominator classified-reads \
   --threads 4 \
   --sort-memory 1G
 ```
