@@ -45,8 +45,11 @@ import pysam
 from align_bam_pipeline import run_pipeline
 from fastq_to_ab1 import phred_from_ascii, synthesize_chromatogram, write_real_ab1
 from generate_report import (
+    DEFAULT_MULTIMER_DENOMINATOR,
     MIN_MULTIMER_ALIGNMENT_FRACTION,
     MIN_MULTIMER_MAPQ,
+    MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS,
+    MULTIMER_DENOMINATOR_CHOICES,
     count_fasta_records,
     generate_report_data,
     read_first_fasta_record,
@@ -874,26 +877,28 @@ def validate_percent_value(name: str, value: object, allow_none: bool = False) -
     return value
 
 
-def multimer_pdf_values(assembly: dict) -> list[float | None]:
+def multimer_pdf_table(assembly: dict) -> tuple[list[str], list[float | None], list[float]]:
     required = [
         ("monomer_pct", "Monomer"),
         ("dimer_pct", "Dimer"),
         ("trimer_pct", "Trimer"),
         ("tetramer_pct", "Tetramer"),
-        ("unclassified_multimer_read_pct", "Unclassified"),
     ]
+    if assembly.get("multimer_denominator") == MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS:
+        required.append(("unclassified_multimer_read_pct", "Unclassified"))
+
     missing = [key for key, _label in required if key not in assembly]
     if missing:
         raise ValueError(f"Missing multimer fields: {', '.join(missing)}")
 
     if not assembly.get("multimer_calculated"):
-        return [None for _key, _label in required]
+        return [label for _key, label in required], [None for _key, _label in required], [1 / len(required)] * len(required)
 
     values = [validate_percent_value(label, assembly[key]) for key, label in required]
     total = sum(value for value in values if value is not None)
     if not 99.0 <= total <= 101.0:
         raise ValueError(f"Multimer percentages should sum to ~100%, got {total:.2f}%")
-    return values
+    return [label for _key, label in required], values, [1 / len(required)] * len(required)
 
 
 def render_pdf_report(
@@ -912,7 +917,7 @@ def render_pdf_report(
     assembly = report_summary["assembly_status"]
     coverage = report_summary["coverage"]
     contamination = ecoli_contamination_pct(report_summary)
-    multimer_values = multimer_pdf_values(assembly)
+    multimer_headers, multimer_values, multimer_widths = multimer_pdf_table(assembly)
     with PdfPages(output_pdf) as pdf:
         fig = plt.figure(figsize=(8.5, 11))
         fig.patch.set_facecolor("white")
@@ -963,9 +968,9 @@ def render_pdf_report(
         draw_table(
             fig,
             [0.07, 0.18, 0.86, 0.08],
-            ["Monomer", "Dimer", "Trimer", "Tetramer", "Unclassified"],
+            multimer_headers,
             [format_percent(value) for value in multimer_values],
-            col_widths=[0.20, 0.20, 0.20, 0.20, 0.20],
+            col_widths=multimer_widths,
         )
 
         pdf.savefig(fig)
@@ -1095,6 +1100,7 @@ def package_sample(
     sort_memory: str = "768M",
     keep_intermediates: bool = False,
     allow_aligned_input: bool = False,
+    multimer_denominator: str = DEFAULT_MULTIMER_DENOMINATOR,
 ) -> dict[str, str]:
     sample_name = metadata.get("sample_name") or barcode
     sample_stem = sample_stem_for_barcode(barcode, metadata)
@@ -1146,6 +1152,7 @@ def package_sample(
         gbk_path=gbk_out,
         sample_name=sample_stem,
         low_confidence_qscore=LOW_CONFIDENCE_QSCORE,
+        multimer_denominator=multimer_denominator,
     )
     validate_length_consistency(metadata, renamed["length_bp"], report_summary)
 
@@ -1188,6 +1195,7 @@ def package_sample(
                 "barcode": barcode,
                 "sample_name": sample_stem,
                 "order_number": order_number,
+                "multimer_denominator": multimer_denominator,
                 "paths": {
                     "order_dir": str(order_dir),
                     "pdf": str(pdf_out),
@@ -1284,6 +1292,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow BAMs that already contain mapped primary reads.",
     )
+    parser.add_argument(
+        "--multimer-denominator",
+        choices=MULTIMER_DENOMINATOR_CHOICES,
+        default=DEFAULT_MULTIMER_DENOMINATOR,
+        help=(
+            "Denominator for monomer/dimer/trimer/tetramer percentages. "
+            "classified-reads reports percentages only among reads classified as 1x-4x; "
+            "all-eligible-reads includes unclassified eligible mapped reads in the denominator."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1360,6 +1378,7 @@ def main() -> None:
                     sort_memory=args.sort_memory,
                     keep_intermediates=args.keep_intermediates,
                     allow_aligned_input=args.allow_aligned_input,
+                    multimer_denominator=args.multimer_denominator,
                 )
             )
         except subprocess.CalledProcessError as exc:
@@ -1372,6 +1391,7 @@ def main() -> None:
     summary = {
         "input_dirs": input_dirs,
         "metadata": str(metadata_path) if metadata_path else None,
+        "multimer_denominator": args.multimer_denominator,
         "output_dir": str(output_dir),
         "packaged": packaged,
         "orders": grouped_orders,

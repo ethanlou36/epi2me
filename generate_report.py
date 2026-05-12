@@ -40,6 +40,13 @@ from bam_to_per_base_data import summarize_bam_to_table
 MULTIMER_TOLERANCE_FRACTION = 0.10
 MIN_MULTIMER_ALIGNMENT_FRACTION = 0.50
 MIN_MULTIMER_MAPQ = 1
+MULTIMER_DENOMINATOR_CLASSIFIED_READS = "classified-reads"
+MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS = "all-eligible-reads"
+MULTIMER_DENOMINATOR_CHOICES = (
+    MULTIMER_DENOMINATOR_CLASSIFIED_READS,
+    MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS,
+)
+DEFAULT_MULTIMER_DENOMINATOR = MULTIMER_DENOMINATOR_CLASSIFIED_READS
 
 
 def read_first_fasta_record(path):
@@ -308,9 +315,21 @@ def multimer_breakdown(
         else None
         for multiple in counts
     }
+    classified_moles_pct = {
+        f"{multiple}-mer": round((counts[multiple] / classified_read_count * 100.0), 3)
+        if classified_read_count
+        else None
+        for multiple in counts
+    }
     mass_pct = {
         f"{multiple}-mer": round((masses[multiple] / total_base_count * 100.0), 3)
         if total_base_count
+        else None
+        for multiple in masses
+    }
+    classified_mass_pct = {
+        f"{multiple}-mer": round((masses[multiple] / classified_base_count * 100.0), 3)
+        if classified_base_count
         else None
         for multiple in masses
     }
@@ -319,6 +338,8 @@ def multimer_breakdown(
         "bases": {f"{multiple}-mer": masses[multiple] for multiple in masses},
         "moles_pct": moles_pct,
         "mass_pct": mass_pct,
+        "classified_moles_pct": classified_moles_pct,
+        "classified_mass_pct": classified_mass_pct,
         "unclassified_read_pct": round((unclassified_read_count / total_read_count * 100.0), 3)
         if total_read_count
         else None,
@@ -349,7 +370,21 @@ def is_multimer_eligible_alignment(read):
     )
 
 
-def bam_summary(bam_path, contig_length):
+def selected_multimer_percentages(
+    multimer: dict,
+    multimer_denominator: str,
+) -> tuple[dict[str, float | None], dict[str, float | None], bool]:
+    if multimer_denominator == MULTIMER_DENOMINATOR_CLASSIFIED_READS:
+        return multimer["classified_moles_pct"], multimer["classified_mass_pct"], multimer["classified_read_count"] > 0
+    if multimer_denominator == MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS:
+        return multimer["moles_pct"], multimer["mass_pct"], multimer["eligible_read_count"] > 0
+    raise ValueError(
+        f"Unsupported multimer denominator {multimer_denominator!r}; "
+        f"expected one of {', '.join(MULTIMER_DENOMINATOR_CHOICES)}"
+    )
+
+
+def bam_summary(bam_path, contig_length, multimer_denominator=DEFAULT_MULTIMER_DENOMINATOR):
     total_records = 0
     total_read_bases = 0
     primary_read_lengths = []
@@ -381,6 +416,10 @@ def bam_summary(bam_path, contig_length):
                 multimer_eligible_read_lengths.append(qlen)
 
     multimer = multimer_breakdown(multimer_eligible_read_lengths, contig_length)
+    selected_moles_pct, selected_mass_pct, multimer_calculated = selected_multimer_percentages(
+        multimer,
+        multimer_denominator,
+    )
     return {
         "total_records": total_records,
         "total_bases": total_read_bases,
@@ -395,13 +434,16 @@ def bam_summary(bam_path, contig_length):
         "mapped_mean_read_length": round(statistics.fmean(mapped_primary_read_lengths), 3)
         if mapped_primary_read_lengths
         else 0.0,
-        "monomer_pct": multimer["moles_pct"]["1-mer"],
-        "dimer_pct": multimer["moles_pct"]["2-mer"],
-        "trimer_pct": multimer["moles_pct"]["3-mer"],
-        "tetramer_pct": multimer["moles_pct"]["4-mer"],
-        "multimer_by_moles_pct": multimer["moles_pct"],
-        "multimer_by_mass_pct": multimer["mass_pct"],
-        "multimer_calculated": multimer["calculated"],
+        "monomer_pct": selected_moles_pct["1-mer"],
+        "dimer_pct": selected_moles_pct["2-mer"],
+        "trimer_pct": selected_moles_pct["3-mer"],
+        "tetramer_pct": selected_moles_pct["4-mer"],
+        "multimer_by_moles_pct": selected_moles_pct,
+        "multimer_by_mass_pct": selected_mass_pct,
+        "multimer_by_all_eligible_reads_pct": multimer["moles_pct"],
+        "multimer_by_classified_reads_pct": multimer["classified_moles_pct"],
+        "multimer_calculated": multimer_calculated,
+        "multimer_denominator": multimer_denominator,
         "multimer_eligible_read_count": multimer["eligible_read_count"],
         "multimer_eligible_base_count": multimer["eligible_base_count"],
         "unclassified_multimer_read_pct": multimer["unclassified_read_pct"],
@@ -526,6 +568,7 @@ def generate_report_data(
     low_confidence_qscore=12,
     plasmidasaurus_summary_txt=None,
     ecoli_contamination_pct=None,
+    multimer_denominator=DEFAULT_MULTIMER_DENOMINATOR,
 ):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -534,7 +577,7 @@ def generate_report_data(
     reference = read_first_fasta_record(reference_fasta) if reference_fasta else None
     gbk_summary = parse_genbank_summary(gbk_path) if gbk_path else None
     maf_summary = parse_maf_summary(maf_path, contig["length_bp"]) if maf_path else None
-    bam_stats = bam_summary(aligned_bam, contig["length_bp"])
+    bam_stats = bam_summary(aligned_bam, contig["length_bp"], multimer_denominator=multimer_denominator)
     vendor_summary = parse_plasmidasaurus_summary(plasmidasaurus_summary_txt) if plasmidasaurus_summary_txt else None
     if ecoli_contamination_pct is None and vendor_summary is not None:
         ecoli_contamination_pct = vendor_summary["ecoli_genomic_contamination_pct"]
@@ -617,7 +660,10 @@ def generate_report_data(
             "tetramer_pct": bam_stats["tetramer_pct"],
             "multimer_by_moles_pct": bam_stats["multimer_by_moles_pct"],
             "multimer_by_mass_pct": bam_stats["multimer_by_mass_pct"],
+            "multimer_by_all_eligible_reads_pct": bam_stats["multimer_by_all_eligible_reads_pct"],
+            "multimer_by_classified_reads_pct": bam_stats["multimer_by_classified_reads_pct"],
             "multimer_calculated": bam_stats["multimer_calculated"],
+            "multimer_denominator": bam_stats["multimer_denominator"],
             "multimer_eligible_read_count": bam_stats["multimer_eligible_read_count"],
             "multimer_eligible_base_count": bam_stats["multimer_eligible_base_count"],
             "unclassified_multimer_read_pct": bam_stats["unclassified_multimer_read_pct"],
@@ -689,6 +735,16 @@ def main():
         default=12,
         help="Mean BAM base-quality threshold for marking low-confidence positions",
     )
+    parser.add_argument(
+        "--multimer-denominator",
+        choices=MULTIMER_DENOMINATOR_CHOICES,
+        default=DEFAULT_MULTIMER_DENOMINATOR,
+        help=(
+            "Denominator for monomer/dimer/trimer/tetramer percentages. "
+            "classified-reads reports percentages only among reads classified as 1x-4x; "
+            "all-eligible-reads includes unclassified eligible mapped reads in the denominator."
+        ),
+    )
     args = parser.parse_args()
 
     report = generate_report_data(
@@ -702,6 +758,7 @@ def main():
         low_confidence_qscore=args.low_confidence_qscore,
         plasmidasaurus_summary_txt=args.plasmidasaurus_summary_txt,
         ecoli_contamination_pct=args.ecoli_contamination_pct,
+        multimer_denominator=args.multimer_denominator,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 

@@ -155,6 +155,7 @@ python epi2me_to_final_package.py \
   --metadata "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS Working Sheet.xlsx" \
   --output-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/output" \
   --barcodes 1 2 \
+  --multimer-denominator classified-reads \
   --threads 4 \
   --sort-memory 1G
 ```
@@ -167,6 +168,8 @@ What the command parts mean:
 - `--metadata` points to the WPS working sheet Excel/CSV/TSV file.
 - `--output-dir` is where the finished customer package will be written.
 - `--barcodes 1 2` limits the run to barcode01 and barcode02. Omit this option to process every barcode found.
+- `--multimer-denominator classified-reads` reports monomer/dimer/trimer/tetramer percentages only among reads that were close enough to 1x/2x/3x/4x plasmid length to classify. This is the default.
+- `--multimer-denominator all-eligible-reads` includes eligible mapped reads that were not classifiable and adds an `Unclassified` column to the multimer table.
 - `--threads 4` makes alignment faster.
 - `--sort-memory 1G` gives `samtools sort` more memory.
 
