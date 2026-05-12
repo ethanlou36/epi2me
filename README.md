@@ -17,16 +17,22 @@ in the Ubuntu terminal, not in PowerShell, Command Prompt, or Anaconda Prompt.
 2. Move into the project folder:
 
 ```bash
-cd /mnt/c/Users/altab/epi2me
+cd /mnt/c/Users/altab/plasmid_report
 ```
 
 That Ubuntu path points to this Windows folder:
 
 ```text
-C:\Users\altab\epi2me
+C:\Users\altab\plasmid_report
 ```
 
-3. Activate the Python virtual environment named `.venv`:
+3. Pull the latest code before each run:
+
+```bash
+git pull
+```
+
+4. Activate the Python virtual environment named `.venv`:
 
 ```bash
 source .venv/bin/activate
@@ -59,13 +65,13 @@ Ubuntu can read files from the Windows `C:` drive, but the path looks different.
 Windows path:
 
 ```text
-C:\Users\altab\epi2me\runs\Run_2026_04_29
+C:\Users\altab\plasmid_report\runs\Run_2026_04_29
 ```
 
 Ubuntu path:
 
 ```text
-/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29
+/mnt/c/Users/altab/plasmid_report/runs/Run_2026_04_29
 ```
 
 Rules:
@@ -135,7 +141,8 @@ exactly one metadata `.xlsx`, `.csv`, or `.tsv` file.
 In Ubuntu, make sure you are in the project folder and `.venv` is active:
 
 ```bash
-cd /mnt/c/Users/altab/epi2me
+cd /mnt/c/Users/altab/plasmid_report
+git pull
 source .venv/bin/activate
 ```
 
