@@ -44,7 +44,13 @@ import pysam
 
 from align_bam_pipeline import run_pipeline
 from fastq_to_ab1 import phred_from_ascii, synthesize_chromatogram, write_real_ab1
-from generate_report import generate_report_data, read_first_fasta_record
+from generate_report import (
+    MIN_MULTIMER_ALIGNMENT_FRACTION,
+    MIN_MULTIMER_MAPQ,
+    count_fasta_records,
+    generate_report_data,
+    read_first_fasta_record,
+)
 
 
 PACKAGE_SUBDIRS = {
@@ -89,6 +95,8 @@ THEME = {
 
 # With qscore now taken directly from BAM base qualities, use a modest ONT-style cutoff.
 LOW_CONFIDENCE_QSCORE = 12
+SIZE_MISMATCH_TOLERANCE_FRACTION = 0.10
+SIZE_MISMATCH_TOLERANCE_BP = 100
 
 
 def slugify(value: str) -> str:
@@ -100,16 +108,19 @@ def normalize_header(header: str) -> str:
 
 
 def normalize_barcode(value: str | int | None) -> str | None:
-    """Normalize WPS/EPI2ME barcode values like 3, 03, 3.0, or barcode3."""
+    """Normalize barcode values like 3, 03, 3.0, barcode3, or barcode03."""
     if value is None:
         return None
     text = str(value).strip()
     if not text:
         return None
-    match = re.search(r"(\d+)", text)
-    if not match:
-        return text.lower()
-    return f"barcode{int(match.group(1)):02d}"
+    explicit = re.fullmatch(r"barcode\s*#?\s*0*(\d+)", text, flags=re.IGNORECASE)
+    if explicit:
+        return f"barcode{int(explicit.group(1)):02d}"
+    numeric = re.fullmatch(r"0*(\d+)(?:\.0+)?", text)
+    if numeric:
+        return f"barcode{int(numeric.group(1)):02d}"
+    return None
 
 
 def normalize_excel_number_text(value: str | int | float | None) -> str:
@@ -152,6 +163,26 @@ def normalize_order_number(value: str | int | float | None) -> str:
     if digits:
         return text
     return text.strip()
+
+
+def parse_expected_size_bp(value: str | int | float | None) -> int | None:
+    text = normalize_excel_number_text(value)
+    if not text or text.strip().lower() in {"unk", "unknown", "na", "n/a", "none"}:
+        return None
+    cleaned = text.strip().lower().replace(",", "")
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(kb|kilobase|kilobases|k)?\b", cleaned)
+    if not match:
+        return None
+    number = float(match.group(1))
+    unit = match.group(2)
+    if unit in {"kb", "kilobase", "kilobases", "k"}:
+        number *= 1000
+    return int(round(number))
+
+
+def lengths_match(observed_bp: int, expected_bp: int) -> bool:
+    allowed = max(SIZE_MISMATCH_TOLERANCE_BP, expected_bp * SIZE_MISMATCH_TOLERANCE_FRACTION)
+    return abs(observed_bp - expected_bp) <= allowed
 
 
 def build_wps_sample_name(meta: dict[str, str], row_number: int | None) -> str | None:
@@ -260,8 +291,10 @@ def canonicalize_metadata_row(row: dict[str, str]) -> dict[str, str]:
             if alias in normalized and normalized[alias]:
                 result[canonical] = normalized[alias]
                 break
-    barcode = normalize_barcode(result.get("barcode"))
-    if barcode is not None:
+    if "barcode" in result:
+        barcode = normalize_barcode(result["barcode"])
+        if barcode is None:
+            raise ValueError(f"Could not parse barcode value: {result['barcode']!r}")
         result["barcode"] = barcode
     if "order_number" in result:
         result["order_number"] = normalize_order_number(result["order_number"])
@@ -297,6 +330,7 @@ def resolve_metadata_path(path: Path) -> Path:
 def load_metadata_lookup(path: Path) -> dict[str, dict[str, str]]:
     metadata_path = resolve_metadata_path(path)
     lookup = {}
+    barcode_rows: dict[str, int] = {}
     for row_number, row in enumerate(read_table_rows(metadata_path), start=1):
         meta = canonicalize_metadata_row(row)
         wps_sample_name = build_wps_sample_name(meta, row_number)
@@ -304,6 +338,11 @@ def load_metadata_lookup(path: Path) -> dict[str, dict[str, str]]:
             meta["sample_name"] = wps_sample_name
         barcode = meta.get("barcode")
         if barcode:
+            if barcode in lookup:
+                raise ValueError(
+                    f"Duplicate metadata barcode {barcode}: rows {barcode_rows[barcode]} and {row_number}"
+                )
+            barcode_rows[barcode] = row_number
             lookup[barcode] = meta
     return lookup
 
@@ -367,9 +406,14 @@ def discover_files_for_key(
         add_discovered_file(records, discovery_errors, barcode, key, path)
 
 
-def infer_bam_barcode(path: Path, file_pattern: re.Pattern) -> tuple[str | None, str | None]:
-    filename_match = file_pattern.match(path.name)
-    filename_barcode = normalize_barcode(filename_match.group(1)) if filename_match else None
+def infer_bam_barcode(path: Path) -> tuple[str | None, str | None]:
+    filename_barcodes = sorted(
+        {
+            normalize_barcode(match)
+            for match in re.findall(r"barcode\d+", path.name, flags=re.IGNORECASE)
+        }
+    )
+    filename_barcodes = [barcode for barcode in filename_barcodes if barcode is not None]
     folder_barcodes = [
         normalize_barcode(parent.name)
         for parent in path.parents
@@ -377,9 +421,15 @@ def infer_bam_barcode(path: Path, file_pattern: re.Pattern) -> tuple[str | None,
     ]
     folder_barcode = folder_barcodes[0] if folder_barcodes else None
 
+    if len(filename_barcodes) > 1:
+        if folder_barcode and folder_barcode in filename_barcodes:
+            return folder_barcode, None
+        return None, f"BAM filename contains multiple barcode tokens {filename_barcodes}: {path}"
+
+    filename_barcode = filename_barcodes[0] if filename_barcodes else None
     if filename_barcode and folder_barcode and filename_barcode != folder_barcode:
         return None, f"BAM filename barcode {filename_barcode} does not match folder barcode {folder_barcode}: {path}"
-    return filename_barcode or folder_barcode, None
+    return folder_barcode or filename_barcode, None
 
 
 def discover_bam_files(
@@ -392,11 +442,10 @@ def discover_bam_files(
     if not directory.is_dir():
         raise ValueError(f"bam path is not a directory: {directory}")
 
-    file_pattern = re.compile(r"^.*(barcode\d+)(?:[^0-9].*)?\.bam$", re.IGNORECASE)
     for path in directory.rglob("*.bam"):
         if not path.is_file():
             continue
-        barcode, error = infer_bam_barcode(path, file_pattern)
+        barcode, error = infer_bam_barcode(path)
         if error:
             discovery_errors.append({"barcode": "unknown", "reason": error})
             continue
@@ -610,26 +659,40 @@ def plot_read_length_vs_bases(raw_bam: Path, aligned_bam: Path, contig_length: i
     out_path.parent.mkdir(parents=True, exist_ok=True)
     mapped_names = set()
     with pysam.AlignmentFile(aligned_bam, "rb") as bam:
-        for read in bam.fetch(until_eof=True):
-            if read.is_secondary or read.is_supplementary or read.is_unmapped:
-                continue
-            mapped_names.add(read.query_name)
-
-    mapped_lengths = []
-    unmapped_lengths = []
-    with pysam.AlignmentFile(raw_bam, "rb", check_sq=False) as bam:
+        seen_aligned_names = set()
         for read in bam.fetch(until_eof=True):
             if read.is_secondary or read.is_supplementary:
                 continue
+            read_name = read.query_name or ""
+            if read_name in seen_aligned_names:
+                raise ValueError(f"Duplicate primary read name in aligned BAM: {read_name!r}")
+            seen_aligned_names.add(read_name)
+            if read.is_unmapped:
+                continue
+            alignment_fraction = ((read.query_alignment_length or 0) / read.query_length) if read.query_length else 0.0
+            if read.mapping_quality >= MIN_MULTIMER_MAPQ and alignment_fraction >= MIN_MULTIMER_ALIGNMENT_FRACTION:
+                mapped_names.add(read_name)
+
+    mapped_lengths = []
+    other_lengths = []
+    with pysam.AlignmentFile(raw_bam, "rb", check_sq=False) as bam:
+        seen_raw_names = set()
+        for read in bam.fetch(until_eof=True):
+            if read.is_secondary or read.is_supplementary:
+                continue
+            read_name = read.query_name or ""
+            if read_name in seen_raw_names:
+                raise ValueError(f"Duplicate primary read name in raw BAM: {read_name!r}")
+            seen_raw_names.add(read_name)
             qlen = read.query_length or 0
             if qlen <= 0:
                 continue
-            if read.query_name in mapped_names:
+            if read_name in mapped_names:
                 mapped_lengths.append(qlen)
             else:
-                unmapped_lengths.append(qlen)
+                other_lengths.append(qlen)
 
-    all_lengths = mapped_lengths + unmapped_lengths
+    all_lengths = mapped_lengths + other_lengths
     fig, ax = plt.subplots(figsize=(7.6, 3.7))
     if all_lengths:
         max_len = max(all_lengths)
@@ -638,31 +701,26 @@ def plot_read_length_vs_bases(raw_bam: Path, aligned_bam: Path, contig_length: i
         stop = int(math.ceil(max_len / bin_size) * bin_size) + bin_size
         bins = np.arange(start, stop + bin_size, bin_size)
         centers = bins[:-1] + bin_size / 2
-        mapped_kb, _ = np.histogram(mapped_lengths, bins=bins, weights=np.asarray(mapped_lengths) / 1000.0)
-        unmapped_kb, _ = np.histogram(unmapped_lengths, bins=bins, weights=np.asarray(unmapped_lengths) / 1000.0)
-        ecoli_kb = np.zeros_like(mapped_kb)
+        mapped_counts, _ = np.histogram(mapped_lengths, bins=bins)
+        other_counts, _ = np.histogram(other_lengths, bins=bins)
 
         band_left = contig_length * 0.9
         band_right = contig_length * 1.1
-        ymax = max((mapped_kb + unmapped_kb).max(), 1)
+        ymax = max((mapped_counts + other_counts).max(), 1)
         ax.axvspan(band_left, band_right, color="#d9d9d9", alpha=0.6, lw=0)
         ax.text((band_left + band_right) / 2, ymax * 0.96, "monomer", ha="center", va="bottom", fontsize=9, fontweight="bold")
 
         width = bin_size * 0.78
-        ax.bar(centers, mapped_kb, width=width, color=THEME["purple"], label="Mapped reads")
-        ax.bar(centers, unmapped_kb, width=width, bottom=mapped_kb, color=THEME["green"], label="Unmapped reads")
-        ax.bar(
-            centers,
-            ecoli_kb,
-            width=width,
-            bottom=mapped_kb + unmapped_kb,
-            color=THEME["cyan"],
-            label="Ecoli reads",
-        )
+        ax.bar(centers, mapped_counts, width=width, color=THEME["purple"], label="Eligible mapped reads")
+        ax.bar(centers, other_counts, width=width, bottom=mapped_counts, color=THEME["green"], label="Other reads")
         ax.set_xlim(left=max(0, start - bin_size * 0.25), right=stop)
         ax.set_ylim(bottom=0)
+    else:
+        ax.text(0.5, 0.5, "No read-length data available", ha="center", va="center", transform=ax.transAxes)
+        ax.set_xlim(left=0, right=1)
+        ax.set_ylim(bottom=0, top=1)
     ax.set_xlabel("Read Length (bp)")
-    ax.set_ylabel("Total Bases (kb)")
+    ax.set_ylabel("Read Count")
     ax.legend(loc="upper right", frameon=True, facecolor="white")
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
@@ -675,6 +733,23 @@ def find_existing_path(paths: Iterable[Path | None]) -> Path | None:
         if path is not None and path.exists():
             return path
     return None
+
+
+def validate_length_consistency(metadata: dict[str, str], fasta_length_bp: int, report_summary: dict) -> None:
+    expected_size_bp = parse_expected_size_bp(metadata.get("size"))
+    if expected_size_bp is not None and not lengths_match(fasta_length_bp, expected_size_bp):
+        raise ValueError(
+            "metadata Size does not match FASTA contig length: "
+            f"metadata={expected_size_bp:,} bp, FASTA={fasta_length_bp:,} bp"
+        )
+
+    genbank_summary = report_summary.get("genbank_summary") or {}
+    genbank_length_bp = genbank_summary.get("length_bp")
+    if genbank_length_bp is not None and int(genbank_length_bp) != int(fasta_length_bp):
+        raise ValueError(
+            "GenBank LOCUS length does not match FASTA contig length: "
+            f"GenBank={int(genbank_length_bp):,} bp, FASTA={fasta_length_bp:,} bp"
+        )
 
 
 def add_logo(fig, logos: list[Path]) -> None:
@@ -769,25 +844,56 @@ def report_date_value(metadata: dict[str, str]) -> str:
     )
 
 
-def contamination_pct(report_summary: dict) -> float | None:
+def ecoli_contamination_pct(report_summary: dict) -> float | None:
     contamination = report_summary.get("contamination") or {}
     if contamination.get("ecoli_genomic_contamination_pct") is not None:
         return contamination["ecoli_genomic_contamination_pct"]
-    if contamination.get("ecoli_base_pct") is not None:
-        return contamination["ecoli_base_pct"]
-    if contamination.get("non_plasmid_primary_unmapped_base_pct") is not None:
-        return contamination["non_plasmid_primary_unmapped_base_pct"]
     return None
 
 
 def format_percent(value: float | None) -> str:
     if value is None:
-        return ""
+        return "N/A"
     return f"{value:.2f}%"
 
 
 def format_yes_no(value: bool | None) -> str:
+    if value is None:
+        return "N/A"
     return "Yes" if value else "No"
+
+
+def validate_percent_value(name: str, value: object, allow_none: bool = False) -> float | None:
+    if value is None and allow_none:
+        return None
+    if not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{name} is not a finite percentage: {value!r}")
+    value = float(value)
+    if not 0.0 <= value <= 100.0:
+        raise ValueError(f"{name} is outside 0..100%: {value}")
+    return value
+
+
+def multimer_pdf_values(assembly: dict) -> list[float | None]:
+    required = [
+        ("monomer_pct", "Monomer"),
+        ("dimer_pct", "Dimer"),
+        ("trimer_pct", "Trimer"),
+        ("tetramer_pct", "Tetramer"),
+        ("unclassified_multimer_read_pct", "Unclassified"),
+    ]
+    missing = [key for key, _label in required if key not in assembly]
+    if missing:
+        raise ValueError(f"Missing multimer fields: {', '.join(missing)}")
+
+    if not assembly.get("multimer_calculated"):
+        return [None for _key, _label in required]
+
+    values = [validate_percent_value(label, assembly[key]) for key, label in required]
+    total = sum(value for value in values if value is not None)
+    if not 99.0 <= total <= 101.0:
+        raise ValueError(f"Multimer percentages should sum to ~100%, got {total:.2f}%")
+    return values
 
 
 def render_pdf_report(
@@ -805,7 +911,8 @@ def render_pdf_report(
     contig = report_summary["contig"]
     assembly = report_summary["assembly_status"]
     coverage = report_summary["coverage"]
-    contamination = contamination_pct(report_summary)
+    contamination = ecoli_contamination_pct(report_summary)
+    multimer_values = multimer_pdf_values(assembly)
     with PdfPages(output_pdf) as pdf:
         fig = plt.figure(figsize=(8.5, 11))
         fig.patch.set_facecolor("white")
@@ -828,12 +935,12 @@ def render_pdf_report(
         draw_table(
             fig,
             [0.07, 0.52, 0.86, 0.08],
-            ["Contig Length\n(bp)", "Bases Mapped", "Reads Mapped", "Host DNA %", "Is Circular?"],
+            ["Contig Length\n(bp)", "Bases Mapped", "Reads Mapped", "E. coli DNA %", "Is Circular?"],
             [
                 f"{contig['length_bp']:,}",
                 f"{assembly.get('bases_mapped', 0):,} ({assembly.get('bases_mapped_pct', 0):.2f}%)",
                 f"{assembly.get('reads_mapped', 0):,} ({assembly.get('reads_mapped_pct', 0):.2f}%)",
-                format_percent(contamination if contamination is not None else 0.0),
+                format_percent(contamination),
                 format_yes_no(contig.get("is_circular")),
             ],
         )
@@ -842,28 +949,23 @@ def render_pdf_report(
         draw_table(
             fig,
             [0.07, 0.35, 0.86, 0.08],
-            ["Mean Read\nDepth", "Min/Max Depth", "Coverage", "Low Confidence\nCount", "Single Contig?"],
+            ["Mean Read\nDepth", "Min/Max Depth", "Mean\nCoverage", "Low Confidence\nCount", "Single Contig?"],
             [
                 f"{round(coverage.get('mean_depth', 0)):,}",
                 f"{coverage.get('min_depth', 0):,} / {coverage.get('max_depth', 0):,}",
                 f"{round(coverage.get('mean_depth', 0)):,}x",
                 f"{coverage.get('low_confidence_count', 0):,}",
-                "Yes",
+                format_yes_no(assembly.get("single_contig")),
             ],
         )
 
         draw_section_heading(fig, 0.275, "Multimer Analysis")
         draw_table(
             fig,
-            [0.17, 0.18, 0.66, 0.08],
-            ["Monomer", "Dimer", "Trimer", "Tetramer"],
-            [
-                format_percent(assembly.get("monomer_pct", 0.0)),
-                format_percent(assembly.get("dimer_pct", 0.0)),
-                format_percent(assembly.get("trimer_pct", 0.0)),
-                format_percent(assembly.get("tetramer_pct", 0.0)),
-            ],
-            col_widths=[0.25, 0.25, 0.25, 0.25],
+            [0.07, 0.18, 0.86, 0.08],
+            ["Monomer", "Dimer", "Trimer", "Tetramer", "Unclassified"],
+            [format_percent(value) for value in multimer_values],
+            col_widths=[0.20, 0.20, 0.20, 0.20, 0.20],
         )
 
         pdf.savefig(fig)
@@ -909,6 +1011,14 @@ def collect_logos(paths: Iterable[str]) -> list[Path]:
     return logos
 
 
+def output_contains_customer_package(output_dir: Path) -> bool:
+    if not output_dir.exists():
+        return False
+    if (output_dir / "run_summary.json").exists():
+        return True
+    return any(path.is_dir() and path.name.startswith("WPS Data_Order #") for path in output_dir.iterdir())
+
+
 def package_sample(
     barcode: str,
     record: dict[str, Path],
@@ -926,6 +1036,9 @@ def package_sample(
     order_number = metadata.get("order_number")
     if not order_number:
         raise ValueError("metadata is missing order_number; refusing to package under WPS Data_Order #UNKNOWN")
+    fasta_record_count = count_fasta_records(record["fasta"])
+    if fasta_record_count != 1:
+        raise ValueError(f"expected exactly one FASTA record for {barcode}, found {fasta_record_count}")
 
     order_dir = output_root / f"WPS Data_Order #{order_number}"
     package_dirs = {name: order_dir / subdir for name, subdir in PACKAGE_SUBDIRS.items()}
@@ -967,6 +1080,7 @@ def package_sample(
         sample_name=sample_stem,
         low_confidence_qscore=LOW_CONFIDENCE_QSCORE,
     )
+    validate_length_consistency(metadata, renamed["length_bp"], report_summary)
 
     per_base_src = Path(report_summary["outputs"]["per_base_details_csv"])
     low_conf_src = Path(report_summary["outputs"]["low_confidence_bases_csv"])
@@ -1103,12 +1217,22 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow BAMs that already contain mapped primary reads.",
     )
+    parser.add_argument(
+        "--allow-existing-output",
+        action="store_true",
+        help="Allow writing into an output directory that already contains WPS package output.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir).resolve()
+    if output_contains_customer_package(output_dir) and not args.allow_existing_output:
+        raise ValueError(
+            f"Output directory already contains WPS package output: {output_dir}. "
+            "Use a new --output-dir, empty the folder, or pass --allow-existing-output if you intentionally want to reuse it."
+        )
     metadata_path = resolve_metadata_path(Path(args.metadata).resolve())
     metadata_lookup = load_metadata_lookup(metadata_path)
     input_dirs = {

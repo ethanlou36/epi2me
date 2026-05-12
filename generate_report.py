@@ -37,6 +37,10 @@ import pysam
 
 from bam_to_per_base_data import summarize_bam_to_table
 
+MULTIMER_TOLERANCE_FRACTION = 0.10
+MIN_MULTIMER_ALIGNMENT_FRACTION = 0.50
+MIN_MULTIMER_MAPQ = 1
+
 
 def read_first_fasta_record(path):
     name = None
@@ -56,6 +60,15 @@ def read_first_fasta_record(path):
         raise ValueError(f"No FASTA record found in {path}")
     sequence = "".join(chunks).upper()
     return {"name": name, "sequence": sequence, "length_bp": len(sequence)}
+
+
+def count_fasta_records(path):
+    count = 0
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as handle:
+        for line in handle:
+            if line.startswith(">"):
+                count += 1
+    return count
 
 
 def parse_plasmidasaurus_summary(path):
@@ -247,9 +260,6 @@ def compute_n50(lengths):
     return 0
 
 
-MULTIMER_TOLERANCE_FRACTION = 0.10
-
-
 def classify_multimer(read_length, contig_length, tolerance_fraction=MULTIMER_TOLERANCE_FRACTION, max_multiple=4):
     if contig_length <= 0:
         return None
@@ -286,18 +296,22 @@ def multimer_breakdown(
         counts[multiple] += 1
         masses[multiple] += read_length
 
+    total_read_count = len(read_lengths)
+    total_base_count = sum(read_lengths)
     classified_read_count = sum(counts.values())
     classified_base_count = sum(masses.values())
+    unclassified_read_count = total_read_count - classified_read_count
+    unclassified_base_count = total_base_count - classified_base_count
     moles_pct = {
-        f"{multiple}-mer": round((counts[multiple] / classified_read_count * 100.0), 3)
-        if classified_read_count
-        else 0.0
+        f"{multiple}-mer": round((counts[multiple] / total_read_count * 100.0), 3)
+        if total_read_count
+        else None
         for multiple in counts
     }
     mass_pct = {
-        f"{multiple}-mer": round((masses[multiple] / classified_base_count * 100.0), 3)
-        if classified_base_count
-        else 0.0
+        f"{multiple}-mer": round((masses[multiple] / total_base_count * 100.0), 3)
+        if total_base_count
+        else None
         for multiple in masses
     }
     return {
@@ -305,11 +319,34 @@ def multimer_breakdown(
         "bases": {f"{multiple}-mer": masses[multiple] for multiple in masses},
         "moles_pct": moles_pct,
         "mass_pct": mass_pct,
+        "unclassified_read_pct": round((unclassified_read_count / total_read_count * 100.0), 3)
+        if total_read_count
+        else None,
+        "unclassified_base_pct": round((unclassified_base_count / total_base_count * 100.0), 3)
+        if total_base_count
+        else None,
+        "eligible_read_count": total_read_count,
+        "eligible_base_count": total_base_count,
         "classified_read_count": classified_read_count,
         "classified_base_count": classified_base_count,
-        "unclassified_read_count": len(read_lengths) - classified_read_count,
-        "unclassified_base_count": sum(read_lengths) - classified_base_count,
+        "unclassified_read_count": unclassified_read_count,
+        "unclassified_base_count": unclassified_base_count,
+        "calculated": total_read_count > 0,
     }
+
+
+def alignment_fraction(read):
+    if not read.query_length:
+        return 0.0
+    return (read.query_alignment_length or 0) / read.query_length
+
+
+def is_multimer_eligible_alignment(read):
+    return (
+        not read.is_unmapped
+        and read.mapping_quality >= MIN_MULTIMER_MAPQ
+        and alignment_fraction(read) >= MIN_MULTIMER_ALIGNMENT_FRACTION
+    )
 
 
 def bam_summary(bam_path, contig_length):
@@ -317,8 +354,10 @@ def bam_summary(bam_path, contig_length):
     total_read_bases = 0
     primary_read_lengths = []
     mapped_primary_read_lengths = []
+    multimer_eligible_read_lengths = []
     mapped_primary_count = 0
     mapped_bases = 0
+    primary_names = set()
 
     with pysam.AlignmentFile(bam_path, "rb") as bam:
         contig = bam.references[0] if bam.nreferences == 1 else None
@@ -326,6 +365,10 @@ def bam_summary(bam_path, contig_length):
             total_records += 1
             if read.is_secondary or read.is_supplementary:
                 continue
+            read_name = read.query_name or ""
+            if read_name in primary_names:
+                raise ValueError(f"Duplicate primary read name in aligned BAM: {read_name!r}")
+            primary_names.add(read_name)
             qlen = read.query_length or 0
             total_read_bases += qlen
             primary_read_lengths.append(qlen)
@@ -334,8 +377,10 @@ def bam_summary(bam_path, contig_length):
             mapped_primary_count += 1
             mapped_primary_read_lengths.append(qlen)
             mapped_bases += read.query_alignment_length or 0
+            if is_multimer_eligible_alignment(read):
+                multimer_eligible_read_lengths.append(qlen)
 
-    multimer = multimer_breakdown(mapped_primary_read_lengths, contig_length)
+    multimer = multimer_breakdown(multimer_eligible_read_lengths, contig_length)
     return {
         "total_records": total_records,
         "total_bases": total_read_bases,
@@ -356,10 +401,17 @@ def bam_summary(bam_path, contig_length):
         "tetramer_pct": multimer["moles_pct"]["4-mer"],
         "multimer_by_moles_pct": multimer["moles_pct"],
         "multimer_by_mass_pct": multimer["mass_pct"],
+        "multimer_calculated": multimer["calculated"],
+        "multimer_eligible_read_count": multimer["eligible_read_count"],
+        "multimer_eligible_base_count": multimer["eligible_base_count"],
+        "unclassified_multimer_read_pct": multimer["unclassified_read_pct"],
+        "unclassified_multimer_base_pct": multimer["unclassified_base_pct"],
         "classified_multimer_read_count": multimer["classified_read_count"],
         "classified_multimer_base_count": multimer["classified_base_count"],
         "unclassified_multimer_read_count": multimer["unclassified_read_count"],
         "unclassified_multimer_base_count": multimer["unclassified_base_count"],
+        "multimer_min_alignment_fraction": MIN_MULTIMER_ALIGNMENT_FRACTION,
+        "multimer_min_mapq": MIN_MULTIMER_MAPQ,
         "primary_read_lengths": primary_read_lengths,
     }
 
@@ -531,7 +583,8 @@ def generate_report_data(
         "contig": {
             "name": contig["name"],
             "length_bp": contig["length_bp"],
-            "is_circular": bool(gbk_summary["is_circular"]) if gbk_summary is not None else None,
+            "is_circular": gbk_summary["is_circular"] if gbk_summary is not None else None,
+            "fasta_record_count": count_fasta_records(contig_fasta),
         },
         "reference": (
             {
@@ -557,17 +610,25 @@ def generate_report_data(
             "bases_mapped_pct": round(bam_stats["mapped_base_pct"], 3),
             "coverage_x": round(coverage_stats["mean_depth"], 3),
             "median_coverage_x": coverage_stats["median_depth"],
-            "is_circular": bool(gbk_summary["is_circular"]) if gbk_summary is not None else None,
+            "is_circular": gbk_summary["is_circular"] if gbk_summary is not None else None,
             "monomer_pct": bam_stats["monomer_pct"],
             "dimer_pct": bam_stats["dimer_pct"],
             "trimer_pct": bam_stats["trimer_pct"],
             "tetramer_pct": bam_stats["tetramer_pct"],
             "multimer_by_moles_pct": bam_stats["multimer_by_moles_pct"],
             "multimer_by_mass_pct": bam_stats["multimer_by_mass_pct"],
+            "multimer_calculated": bam_stats["multimer_calculated"],
+            "multimer_eligible_read_count": bam_stats["multimer_eligible_read_count"],
+            "multimer_eligible_base_count": bam_stats["multimer_eligible_base_count"],
+            "unclassified_multimer_read_pct": bam_stats["unclassified_multimer_read_pct"],
+            "unclassified_multimer_base_pct": bam_stats["unclassified_multimer_base_pct"],
             "classified_multimer_read_count": bam_stats["classified_multimer_read_count"],
             "classified_multimer_base_count": bam_stats["classified_multimer_base_count"],
             "unclassified_multimer_read_count": bam_stats["unclassified_multimer_read_count"],
             "unclassified_multimer_base_count": bam_stats["unclassified_multimer_base_count"],
+            "multimer_min_alignment_fraction": bam_stats["multimer_min_alignment_fraction"],
+            "multimer_min_mapq": bam_stats["multimer_min_mapq"],
+            "single_contig": count_fasta_records(contig_fasta) == 1,
         },
         "coverage": coverage_stats,
         "contamination": {

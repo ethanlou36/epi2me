@@ -170,6 +170,15 @@ What the command parts mean:
 - `--threads 4` makes alignment faster.
 - `--sort-memory 1G` gives `samtools sort` more memory.
 
+Use a new or empty `--output-dir` for each run. The script refuses to write
+into an output folder that already contains WPS package output, because old PDFs
+from skipped samples can otherwise be mistaken for fresh reports. If you really
+intend to add to an existing output folder, add:
+
+```bash
+--allow-existing-output
+```
+
 Most runs should not use `--keep-intermediates` or `--allow-aligned-input`.
 Those are debugging/override options.
 
