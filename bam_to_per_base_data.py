@@ -27,8 +27,8 @@ def open_maybe_gzip(path):
     if path.endswith(".gz"):
         import gzip
 
-        return gzip.open(path, "rt", encoding="ascii")
-    return open(path, "r", encoding="ascii")
+        return gzip.open(path, "rt", encoding="utf-8-sig", errors="replace")
+    return open(path, "r", encoding="utf-8-sig", errors="replace")
 
 
 def parse_fasta(path):
@@ -75,7 +75,7 @@ def parse_genbank(path):
     name = None
     collecting = False
     chunks = []
-    with open(path, "r", encoding="ascii", errors="replace") as handle:
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as handle:
         for raw_line in handle:
             line = raw_line.rstrip("\n")
             if line.startswith("LOCUS"):

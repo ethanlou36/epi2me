@@ -480,7 +480,7 @@ def find_sample_stem_collisions(
 
 def write_renamed_fasta(src_fasta: Path, dst_fasta: Path, sequence_name: str) -> dict[str, str | int]:
     record = read_first_fasta_record(src_fasta)
-    sequence = record["sequence"]
+    sequence = "".join(ch if ord(ch) < 128 else "N" for ch in record["sequence"])
     dst_fasta.parent.mkdir(parents=True, exist_ok=True)
     with dst_fasta.open("w", encoding="ascii") as handle:
         handle.write(f">{sequence_name}\n")
@@ -491,7 +491,7 @@ def write_renamed_fasta(src_fasta: Path, dst_fasta: Path, sequence_name: str) ->
 
 def rewrite_genbank_locus(src_gbk: Path, dst_gbk: Path, locus_name: str) -> None:
     dst_gbk.parent.mkdir(parents=True, exist_ok=True)
-    lines = src_gbk.read_text(encoding="ascii", errors="replace").splitlines()
+    lines = src_gbk.read_text(encoding="utf-8-sig", errors="replace").splitlines()
     safe_locus = re.sub(r"[^A-Za-z0-9_.-]+", "_", locus_name).strip("_")[:16] or "record"
     out_lines = []
     for idx, line in enumerate(lines):
@@ -506,11 +506,11 @@ def rewrite_genbank_locus(src_gbk: Path, dst_gbk: Path, locus_name: str) -> None
             else:
                 line = f"LOCUS       {safe_locus}"
         out_lines.append(line)
-    dst_gbk.write_text("\n".join(out_lines) + "\n", encoding="ascii")
+    dst_gbk.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
 
 
 def parse_fastq_record(path: Path) -> tuple[str, str, str]:
-    with path.open("r", encoding="ascii") as handle:
+    with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
         header = handle.readline().rstrip("\n\r")
         seq = handle.readline().rstrip("\n\r")
         handle.readline()

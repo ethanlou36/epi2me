@@ -21,7 +21,7 @@ def parse_fastq(path):
     Simple FASTQ parser for standard 4-line FASTQ.
     Assumes Sanger-style PHRED+33 unless you change phred_offset below.
     """
-    with open(path, "r", encoding="ascii") as f:
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
         while True:
             header = f.readline()
             if not header:

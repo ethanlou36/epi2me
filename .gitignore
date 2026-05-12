@@ -28,6 +28,14 @@ reads.fastq
 *.fq.gz
 *.fai
 
+# Ad hoc input files dropped in the repo root during local runs/debugging
+/barcode*.annotations.gbk
+/barcode*.final.fasta
+/barcode*.final.fa
+/barcode*.final.fastq
+/barcode*.final.fq
+/barcode*.assembly.maf
+
 # Generated customer/package artifacts
 WPS Data_Order #*/
 customer_packages/

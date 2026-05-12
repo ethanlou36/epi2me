@@ -154,7 +154,7 @@ def run_pipeline(
     bam_to_fastq(samtools, bam_path, reads_fastq)
     index_reference_fasta(samtools, reference_path)
 
-    with open(sam_path, "w", encoding="ascii") as sam_handle:
+    with open(sam_path, "wb") as sam_handle:
         run_command(
             [
                 minimap2,

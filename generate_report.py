@@ -41,7 +41,7 @@ from bam_to_per_base_data import summarize_bam_to_table
 def read_first_fasta_record(path):
     name = None
     chunks = []
-    with open(path, "r", encoding="ascii") as handle:
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as handle:
         for line in handle:
             line = line.strip()
             if not line:
@@ -99,7 +99,7 @@ def parse_genbank_summary(path):
     features = []
     current_feature = None
 
-    with open(path, "r", encoding="ascii", errors="replace") as handle:
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as handle:
         for raw_line in handle:
             line = raw_line.rstrip("\n")
             if line.startswith("LOCUS"):
