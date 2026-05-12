@@ -143,7 +143,18 @@ cd /mnt/c/Users/altab/epi2me
 source .venv/bin/activate
 ```
 
-Then run the report command. This example processes barcode 1 and barcode 2:
+Minimum command using only the required input folders, metadata, and barcode filter:
+
+```bash
+python epi2me_to_final_package.py \
+  --fasta-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/fasta_files" \
+  --genbank-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/genbank_files" \
+  --bam-dir "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/bam_files" \
+  --metadata "/mnt/c/Users/altab/epi2me/runs/Run_2026_04_29/WPS Working Sheet.xlsx" \
+  --barcodes 1 2
+```
+
+Then run the fuller report command if you also have optional FASTQ/MAF files or want to choose an output folder. This example processes barcode 1 and barcode 2:
 
 ```bash
 python epi2me_to_final_package.py \

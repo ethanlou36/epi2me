@@ -333,7 +333,8 @@ def resolve_metadata_path(path: Path) -> Path:
 def load_metadata_lookup(path: Path) -> dict[str, dict[str, str]]:
     metadata_path = resolve_metadata_path(path)
     lookup = {}
-    barcode_rows: dict[str, int] = {}
+    barcode_order_rows: dict[tuple[str, str], int] = {}
+    barcode_to_order: dict[str, str] = {}
     for row_number, row in enumerate(read_table_rows(metadata_path), start=1):
         meta = canonicalize_metadata_row(row)
         wps_sample_name = build_wps_sample_name(meta, row_number)
@@ -341,11 +342,22 @@ def load_metadata_lookup(path: Path) -> dict[str, dict[str, str]]:
             meta["sample_name"] = wps_sample_name
         barcode = meta.get("barcode")
         if barcode:
-            if barcode in lookup:
+            order_number = meta.get("order_number", "")
+            barcode_order = (order_number, barcode)
+            if barcode_order in barcode_order_rows:
                 raise ValueError(
-                    f"Duplicate metadata barcode {barcode}: rows {barcode_rows[barcode]} and {row_number}"
+                    f"Duplicate metadata order/barcode pair Order #{order_number}, {barcode}: "
+                    f"rows {barcode_order_rows[barcode_order]} and {row_number}"
                 )
-            barcode_rows[barcode] = row_number
+            existing_order = barcode_to_order.get(barcode)
+            if existing_order is not None and existing_order != order_number:
+                raise ValueError(
+                    f"Metadata barcode {barcode} appears under multiple orders: "
+                    f"Order #{existing_order} and Order #{order_number}. "
+                    "A barcode can only map to one sample/order in a single run."
+                )
+            barcode_order_rows[barcode_order] = row_number
+            barcode_to_order[barcode] = order_number
             lookup[barcode] = meta
     return lookup
 
