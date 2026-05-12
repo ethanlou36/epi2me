@@ -364,7 +364,7 @@ def load_metadata_lookup(path: Path) -> dict[str, dict[str, str]]:
     return lookup
 
 
-def group_packaged_by_order(packaged: list[dict[str, str]]) -> dict[str, dict[str, object]]:
+def group_packaged_by_order(packaged: list[dict[str, object]]) -> dict[str, dict[str, object]]:
     grouped: dict[str, dict[str, object]] = {}
     for item in packaged:
         order_number = item["order_number"]
@@ -765,11 +765,12 @@ def find_existing_path(paths: Iterable[Path | None]) -> Path | None:
     return None
 
 
-def validate_length_consistency(metadata: dict[str, str], fasta_length_bp: int, report_summary: dict) -> None:
+def validate_length_consistency(metadata: dict[str, str], fasta_length_bp: int, report_summary: dict) -> list[str]:
+    warnings = []
     expected_size_bp = parse_expected_size_bp(metadata.get("size"))
     if expected_size_bp is not None and not lengths_match(fasta_length_bp, expected_size_bp):
-        raise ValueError(
-            "metadata Size does not match FASTA contig length: "
+        warnings.append(
+            "metadata Size does not match FASTA contig length; using FASTA length: "
             f"metadata={expected_size_bp:,} bp, FASTA={fasta_length_bp:,} bp"
         )
 
@@ -780,6 +781,7 @@ def validate_length_consistency(metadata: dict[str, str], fasta_length_bp: int, 
             "GenBank LOCUS length does not match FASTA contig length: "
             f"GenBank={int(genbank_length_bp):,} bp, FASTA={fasta_length_bp:,} bp"
         )
+    return warnings
 
 
 def add_logo(fig, logos: list[Path]) -> None:
@@ -878,7 +880,7 @@ def ecoli_contamination_pct(report_summary: dict) -> float | None:
     contamination = report_summary.get("contamination") or {}
     if contamination.get("ecoli_genomic_contamination_pct") is not None:
         return contamination["ecoli_genomic_contamination_pct"]
-    return None
+    return 0.0
 
 
 def format_percent(value: float | None) -> str:
@@ -1140,7 +1142,7 @@ def package_sample(
     keep_intermediates: bool = False,
     allow_aligned_input: bool = False,
     multimer_denominator: str = DEFAULT_MULTIMER_DENOMINATOR,
-) -> dict[str, str]:
+) -> dict[str, object]:
     sample_name = metadata.get("sample_name") or barcode
     sample_stem = sample_stem_for_barcode(barcode, metadata)
     sequence_name = f"{sample_stem}_contig"
@@ -1193,7 +1195,7 @@ def package_sample(
         low_confidence_qscore=LOW_CONFIDENCE_QSCORE,
         multimer_denominator=multimer_denominator,
     )
-    validate_length_consistency(metadata, renamed["length_bp"], report_summary)
+    warnings = validate_length_consistency(metadata, renamed["length_bp"], report_summary)
 
     per_base_src = Path(report_summary["outputs"]["per_base_details_csv"])
     low_conf_src = Path(report_summary["outputs"]["low_confidence_bases_csv"])
@@ -1235,6 +1237,7 @@ def package_sample(
                 "sample_name": sample_stem,
                 "order_number": order_number,
                 "multimer_denominator": multimer_denominator,
+                "warnings": warnings,
                 "paths": {
                     "order_dir": str(order_dir),
                     "pdf": str(pdf_out),
@@ -1258,6 +1261,7 @@ def package_sample(
         "order_number": order_number,
         "order_dir": str(order_dir),
         "pdf": str(pdf_out),
+        "warnings": warnings,
     }
 
 
@@ -1434,6 +1438,8 @@ def main() -> None:
         print(f"order: {order_number} -> {order['order_dir']} ({order['sample_count']} sample(s))")
     for item in packaged:
         print(f"packaged: {item['barcode']} -> {item['order_dir']}")
+        for warning in item.get("warnings", []):
+            print(f"warning: {item['barcode']} ({warning})")
     for item in skipped:
         print(f"skipped: {item['barcode']} ({item['reason']})")
 
