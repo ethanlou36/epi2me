@@ -170,14 +170,9 @@ What the command parts mean:
 - `--threads 4` makes alignment faster.
 - `--sort-memory 1G` gives `samtools sort` more memory.
 
-Use a new or empty `--output-dir` for each run. The script refuses to write
-into an output folder that already contains WPS package output, because old PDFs
-from skipped samples can otherwise be mistaken for fresh reports. If you really
-intend to add to an existing output folder, add:
-
-```bash
---allow-existing-output
-```
+It is okay to reuse the same `--output-dir`. If the same barcode is run again,
+the script removes the previous files for that barcode and writes fresh ones.
+Reports for other barcodes in the same order folder are left alone.
 
 Most runs should not use `--keep-intermediates` or `--allow-aligned-input`.
 Those are debugging/override options.

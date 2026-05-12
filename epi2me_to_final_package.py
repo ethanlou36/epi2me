@@ -1011,12 +1011,78 @@ def collect_logos(paths: Iterable[str]) -> list[Path]:
     return logos
 
 
-def output_contains_customer_package(output_dir: Path) -> bool:
-    if not output_dir.exists():
+def path_is_inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
         return False
-    if (output_dir / "run_summary.json").exists():
-        return True
-    return any(path.is_dir() and path.name.startswith("WPS Data_Order #") for path in output_dir.iterdir())
+    return True
+
+
+def remove_output_path(path: Path, output_root: Path) -> None:
+    if not path_is_inside(path, output_root) or not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def remove_empty_package_dirs(order_dir: Path) -> None:
+    for subdir in PACKAGE_SUBDIRS.values():
+        path = order_dir / subdir
+        if path.exists() and path.is_dir():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+    try:
+        order_dir.rmdir()
+    except OSError:
+        pass
+
+
+def cleanup_previous_barcode_output(output_root: Path, barcode: str, sample_stem: str) -> None:
+    work_root = output_root / "_work"
+    touched_order_dirs: set[Path] = set()
+    if work_root.exists():
+        for summary_path in work_root.glob("*/package_summary.json"):
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if summary.get("barcode") != barcode:
+                continue
+            paths = summary.get("paths") or {}
+            order_dir = paths.get("order_dir")
+            if order_dir:
+                touched_order_dirs.add(Path(order_dir))
+            for value in paths.values():
+                if isinstance(value, list):
+                    for item in value:
+                        remove_output_path(Path(item), output_root)
+                elif value and Path(value).name != "":
+                    path = Path(value)
+                    if path.is_file() or path.suffix:
+                        remove_output_path(path, output_root)
+            remove_output_path(summary_path.parent, output_root)
+
+    current_work_dir = work_root / sample_stem
+    current_summary = current_work_dir / "package_summary.json"
+    if current_summary.exists():
+        try:
+            summary = json.loads(current_summary.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            summary = {}
+        existing_barcode = summary.get("barcode")
+        if existing_barcode and existing_barcode != barcode:
+            raise ValueError(
+                f"existing work directory {current_work_dir} belongs to {existing_barcode}, not {barcode}"
+            )
+    remove_output_path(current_work_dir, output_root)
+
+    for order_dir in touched_order_dirs:
+        remove_empty_package_dirs(order_dir)
 
 
 def package_sample(
@@ -1041,6 +1107,7 @@ def package_sample(
         raise ValueError(f"expected exactly one FASTA record for {barcode}, found {fasta_record_count}")
 
     order_dir = output_root / f"WPS Data_Order #{order_number}"
+    cleanup_previous_barcode_output(output_root, barcode, sample_stem)
     package_dirs = {name: order_dir / subdir for name, subdir in PACKAGE_SUBDIRS.items()}
     for path in package_dirs.values():
         path.mkdir(parents=True, exist_ok=True)
@@ -1217,22 +1284,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow BAMs that already contain mapped primary reads.",
     )
-    parser.add_argument(
-        "--allow-existing-output",
-        action="store_true",
-        help="Allow writing into an output directory that already contains WPS package output.",
-    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir).resolve()
-    if output_contains_customer_package(output_dir) and not args.allow_existing_output:
-        raise ValueError(
-            f"Output directory already contains WPS package output: {output_dir}. "
-            "Use a new --output-dir, empty the folder, or pass --allow-existing-output if you intentionally want to reuse it."
-        )
     metadata_path = resolve_metadata_path(Path(args.metadata).resolve())
     metadata_lookup = load_metadata_lookup(metadata_path)
     input_dirs = {
