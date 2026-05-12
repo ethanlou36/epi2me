@@ -165,7 +165,8 @@ What the command parts mean:
 
 - `python epi2me_to_final_package.py` starts the report generator.
 - `--folder-name` names the folder under `/mnt/c/WPS data/` containing all run input files.
-- `--output-dir` is where the finished customer package will be written.
+- `--output-dir` is where the finished customer package will be written. If
+  omitted, the output goes into `C:\WPS data\<folder-name>\output\`.
 - `--barcodes 1 2` limits the run to barcode01 and barcode02. Omit this option to process every barcode found.
 - `--multimer-denominator classified-reads` reports monomer/dimer/trimer/tetramer percentages only among reads that were close enough to 1x/2x/3x/4x plasmid length to classify. This is the default.
 - `--multimer-denominator all-eligible-reads` includes eligible mapped reads that were not classifiable and adds an `Unclassified` column to the multimer table.
@@ -175,6 +176,8 @@ What the command parts mean:
 It is okay to reuse the same `--output-dir`. If the same barcode is run again,
 the script removes the previous files for that barcode and writes fresh ones.
 Reports for other barcodes in the same order folder are left alone.
+The default `output` folder is ignored during input discovery, so rerunning the
+same folder will not treat generated alignment files as new input BAMs.
 
 Most runs should not use `--keep-intermediates` or `--allow-aligned-input`.
 Those are debugging/override options.

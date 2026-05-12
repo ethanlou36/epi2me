@@ -101,6 +101,7 @@ LOW_CONFIDENCE_QSCORE = 12
 SIZE_MISMATCH_TOLERANCE_FRACTION = 0.10
 SIZE_MISMATCH_TOLERANCE_BP = 100
 INPUT_ROOT = Path("/mnt/c/WPS data")
+DEFAULT_OUTPUT_SUBDIR = "output"
 
 
 def slugify(value: str) -> str:
@@ -452,14 +453,26 @@ def discover_bam_files(
     records: dict[str, dict[str, Path]],
     discovery_errors: list[dict[str, str]],
     directory: Path,
+    exclude_dirs: Iterable[Path] | None = None,
 ) -> None:
     if not directory.exists():
         raise ValueError(f"bam directory does not exist: {directory}")
     if not directory.is_dir():
         raise ValueError(f"bam path is not a directory: {directory}")
 
+    resolved_excludes = [
+        path.resolve()
+        for path in (exclude_dirs or [])
+        if path.resolve() != directory.resolve()
+    ]
+
     for path in directory.rglob("*.bam"):
         if not path.is_file():
+            continue
+        resolved_path = path.resolve()
+        if any(path_is_inside(resolved_path, excluded) for excluded in resolved_excludes):
+            continue
+        if any(parent.name == "_work" or parent.name.startswith("WPS Data_Order #") for parent in path.parents):
             continue
         barcode, error = infer_bam_barcode(path)
         if error:
@@ -476,6 +489,7 @@ def discover_input_records(
     bam_dir: Path,
     fastq_dir: Path | None = None,
     maf_dir: Path | None = None,
+    exclude_dirs: Iterable[Path] | None = None,
 ) -> tuple[dict[str, dict[str, Path]], list[dict[str, str]]]:
     records: dict[str, dict[str, Path]] = defaultdict(dict)
     discovery_errors: list[dict[str, str]] = []
@@ -493,7 +507,7 @@ def discover_input_records(
         genbank_dir,
         re.compile(r"^(barcode\d+)\.annotations\.gbk$", re.IGNORECASE),
     )
-    discover_bam_files(records, discovery_errors, bam_dir)
+    discover_bam_files(records, discovery_errors, bam_dir, exclude_dirs=exclude_dirs)
     if fastq_dir is not None:
         discover_files_for_key(
             records,
@@ -1261,8 +1275,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="customer_packages",
-        help="Output directory for WPS order folders. Default: ./customer_packages",
+        default=None,
+        help=(
+            f"Output directory for WPS order folders. "
+            f"Default: <folder-name>/{DEFAULT_OUTPUT_SUBDIR}"
+        ),
     )
     parser.add_argument(
         "--barcodes",
@@ -1319,7 +1336,7 @@ def main() -> None:
     if not input_dir.is_dir():
         raise ValueError(f"input path is not a directory: {input_dir}")
 
-    output_dir = Path(args.output_dir).resolve()
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else input_dir / DEFAULT_OUTPUT_SUBDIR
     metadata_path = resolve_metadata_path(input_dir)
     metadata_lookup = load_metadata_lookup(metadata_path)
     records, discovery_errors = discover_input_records(
@@ -1328,6 +1345,7 @@ def main() -> None:
         bam_dir=input_dir,
         fastq_dir=input_dir,
         maf_dir=input_dir,
+        exclude_dirs=[output_dir],
     )
 
     requested = None
