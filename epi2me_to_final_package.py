@@ -1073,7 +1073,7 @@ def render_pdf_report(
         draw_table(
             fig,
             [0.035, 0.35, 0.93, 0.08],
-            ["Mean Read Depth", "Min/Max Depth", "Coverage", "Low Confidence Reads", "Single Contig?"],
+            ["Mean Read Depth", "Min/Max Depth", "Coverage", "Low Confidence Bases", "Single Contig?"],
             [
                 f"{round(coverage.get('mean_depth', 0)):,}",
                 f"{coverage.get('min_depth', 0):,} / {coverage.get('max_depth', 0):,}",
