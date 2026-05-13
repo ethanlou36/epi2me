@@ -37,9 +37,11 @@ import pysam
 
 from bam_to_per_base_data import summarize_bam_to_table
 
-MULTIMER_TOLERANCE_FRACTION = 0.10
+MULTIMER_TOLERANCE_FRACTION = 0.05
 MIN_MULTIMER_ALIGNMENT_FRACTION = 0.50
 MIN_MULTIMER_MAPQ = 1
+READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP = 1000
+COVERAGE_Y_AXIS_HEADROOM = 1000
 MULTIMER_DENOMINATOR_CLASSIFIED_READS = "classified-reads"
 MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS = "all-eligible-reads"
 MULTIMER_DENOMINATOR_CHOICES = (
@@ -271,11 +273,16 @@ def classify_multimer(read_length, contig_length, tolerance_fraction=MULTIMER_TO
     if contig_length <= 0:
         return None
     ratio = read_length / contig_length
-    candidates = [
-        (abs(ratio - multiple), multiple)
-        for multiple in range(1, max_multiple + 1)
-        if abs(ratio - multiple) <= tolerance_fraction
-    ]
+    candidates = []
+    for multiple in range(1, max_multiple + 1):
+        delta = abs(ratio - multiple)
+        if delta <= tolerance_fraction or math.isclose(
+            delta,
+            tolerance_fraction,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            candidates.append((delta, multiple))
     if not candidates:
         return None
     candidates.sort()
@@ -487,6 +494,7 @@ def plot_coverage_map(per_base_rows, low_conf_rows, out_path, title):
     if low_positions:
         ax.scatter(low_positions, low_depths, marker="x", color="#e67e22", s=18, linewidths=0.8)
     ax.set_xlim(left=0, right=max(positions))
+    ax.set_ylim(bottom=0, top=max(depths, default=0) + COVERAGE_Y_AXIS_HEADROOM)
     ax.margins(x=0)
     ax.set_xlabel("Base Position")
     ax.set_ylabel("Depth")
@@ -499,6 +507,7 @@ def plot_coverage_map(per_base_rows, low_conf_rows, out_path, title):
 
 def plot_read_length_histogram(read_lengths, out_path, title):
     fig, ax = plt.subplots(figsize=(8.5, 5))
+    read_lengths = [length for length in read_lengths if length > READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP]
     bins = min(80, max(15, int(math.sqrt(len(read_lengths))))) if read_lengths else 20
     ax.hist(read_lengths, bins=bins, color="#6d8f72", edgecolor="white")
     ax.set_xlabel("Read Length (bp)")
@@ -581,6 +590,8 @@ def generate_report_data(
     vendor_summary = parse_plasmidasaurus_summary(plasmidasaurus_summary_txt) if plasmidasaurus_summary_txt else None
     if ecoli_contamination_pct is None and vendor_summary is not None:
         ecoli_contamination_pct = vendor_summary["ecoli_genomic_contamination_pct"]
+    if ecoli_contamination_pct is None:
+        ecoli_contamination_pct = 0.0
 
     per_base_csv = out_dir / "per_base_details.csv"
     low_conf_csv = out_dir / "low_confidence_bases.csv"

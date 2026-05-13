@@ -38,7 +38,7 @@ matplotlib.use("Agg")
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.patches import Patch, Rectangle
+from matplotlib.patches import FancyBboxPatch, Patch, Rectangle
 import numpy as np
 import pysam
 
@@ -46,10 +46,11 @@ from align_bam_pipeline import run_pipeline
 from fastq_to_ab1 import phred_from_ascii, synthesize_chromatogram, write_real_ab1
 from generate_report import (
     DEFAULT_MULTIMER_DENOMINATOR,
-    MIN_MULTIMER_ALIGNMENT_FRACTION,
-    MIN_MULTIMER_MAPQ,
     MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS,
     MULTIMER_DENOMINATOR_CHOICES,
+    MULTIMER_TOLERANCE_FRACTION,
+    COVERAGE_Y_AXIS_HEADROOM,
+    READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP,
     count_fasta_records,
     generate_report_data,
     read_first_fasta_record,
@@ -82,12 +83,12 @@ HEADER_ALIASES = {
 }
 
 THEME = {
-    "title": "#343C67",
+    "title": "#10223A",
     "heading": "#003B73",
+    "rule": "#005DAA",
     "teal": "#0D8686",
-    "table_header": "#C6D9F1",
-    "table_body": "#F3FBFB",
-    "table_edge": "#D9D9D9",
+    "table_border": "#052866",
+    "table_grid": "#052866",
     "purple": "#51459A",
     "green": "#44D8A4",
     "cyan": "#12A9D4",
@@ -102,6 +103,7 @@ SIZE_MISMATCH_TOLERANCE_FRACTION = 0.10
 SIZE_MISMATCH_TOLERANCE_BP = 100
 INPUT_ROOT = Path("/mnt/c/WPS data")
 DEFAULT_OUTPUT_SUBDIR = "output"
+DEFAULT_LOGO_PATH = Path(__file__).resolve().with_name("Alta Biotech Logo.jpg")
 
 
 def slugify(value: str) -> str:
@@ -672,6 +674,7 @@ def plot_pdf_coverage_map(per_base_csv: Path, low_conf_csv: Path, out_path: Path
         if low_positions:
             ax.scatter(low_positions, low_depths, marker="x", color="#e67e22", s=16, linewidths=0.8)
         ax.set_xlim(left=0, right=max(positions))
+        ax.set_ylim(bottom=0, top=max(depths, default=0) + COVERAGE_Y_AXIS_HEADROOM)
     else:
         ax.text(0.5, 0.5, "No coverage data available", ha="center", va="center", transform=ax.transAxes)
         ax.set_xlim(left=0, right=1)
@@ -699,9 +702,7 @@ def plot_read_length_vs_bases(raw_bam: Path, aligned_bam: Path, contig_length: i
             seen_aligned_names.add(read_name)
             if read.is_unmapped:
                 continue
-            alignment_fraction = ((read.query_alignment_length or 0) / read.query_length) if read.query_length else 0.0
-            if read.mapping_quality >= MIN_MULTIMER_MAPQ and alignment_fraction >= MIN_MULTIMER_ALIGNMENT_FRACTION:
-                mapped_names.add(read_name)
+            mapped_names.add(read_name)
 
     mapped_lengths = []
     other_lengths = []
@@ -715,7 +716,7 @@ def plot_read_length_vs_bases(raw_bam: Path, aligned_bam: Path, contig_length: i
                 raise ValueError(f"Duplicate primary read name in raw BAM: {read_name!r}")
             seen_raw_names.add(read_name)
             qlen = read.query_length or 0
-            if qlen <= 0:
+            if qlen <= READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP:
                 continue
             if read_name in mapped_names:
                 mapped_lengths.append(qlen)
@@ -731,18 +732,26 @@ def plot_read_length_vs_bases(raw_bam: Path, aligned_bam: Path, contig_length: i
         stop = int(math.ceil(max_len / bin_size) * bin_size) + bin_size
         bins = np.arange(start, stop + bin_size, bin_size)
         centers = bins[:-1] + bin_size / 2
-        mapped_counts, _ = np.histogram(mapped_lengths, bins=bins)
-        other_counts, _ = np.histogram(other_lengths, bins=bins)
+        mapped_bases_kb, _ = np.histogram(
+            mapped_lengths,
+            bins=bins,
+            weights=np.array(mapped_lengths, dtype=float) / 1000.0,
+        )
+        other_bases_kb, _ = np.histogram(
+            other_lengths,
+            bins=bins,
+            weights=np.array(other_lengths, dtype=float) / 1000.0,
+        )
 
-        band_left = contig_length * 0.9
-        band_right = contig_length * 1.1
-        ymax = max((mapped_counts + other_counts).max(), 1)
+        band_left = contig_length * (1.0 - MULTIMER_TOLERANCE_FRACTION)
+        band_right = contig_length * (1.0 + MULTIMER_TOLERANCE_FRACTION)
+        ymax = max((mapped_bases_kb + other_bases_kb).max(), 1)
         ax.axvspan(band_left, band_right, color="#d9d9d9", alpha=0.6, lw=0)
         ax.text((band_left + band_right) / 2, ymax * 0.96, "monomer", ha="center", va="bottom", fontsize=9, fontweight="bold")
 
         width = bin_size * 0.78
-        ax.bar(centers, mapped_counts, width=width, color=THEME["purple"], label="Eligible mapped reads")
-        ax.bar(centers, other_counts, width=width, bottom=mapped_counts, color=THEME["green"], label="Other reads")
+        ax.bar(centers, mapped_bases_kb, width=width, color=THEME["purple"], label="Mapped reads")
+        ax.bar(centers, other_bases_kb, width=width, bottom=mapped_bases_kb, color=THEME["green"], label="Unmapped reads")
         ax.set_xlim(left=max(0, start - bin_size * 0.25), right=stop)
         ax.set_ylim(bottom=0)
     else:
@@ -750,7 +759,7 @@ def plot_read_length_vs_bases(raw_bam: Path, aligned_bam: Path, contig_length: i
         ax.set_xlim(left=0, right=1)
         ax.set_ylim(bottom=0, top=1)
     ax.set_xlabel("Read Length (bp)")
-    ax.set_ylabel("Read Count")
+    ax.set_ylabel("Total Bases (kb)")
     ax.legend(loc="upper right", frameon=True, facecolor="white")
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
@@ -788,18 +797,18 @@ def add_logo(fig, logos: list[Path]) -> None:
     for logo in logos[:1]:
         if not logo.exists():
             continue
-        ax = fig.add_axes([0.055, 0.94, 0.16, 0.055])
+        ax = fig.add_axes([0.055, 0.918, 0.145, 0.075])
         ax.set_axis_off()
         ax.imshow(mpimg.imread(logo))
 
 
 def draw_report_title(fig, logos: list[Path]) -> None:
     add_logo(fig, logos)
-    header_ax = fig.add_axes([0.05, 0.905, 0.90, 0.03])
+    header_ax = fig.add_axes([0.05, 0.91, 0.90, 0.018])
     header_ax.set_axis_off()
-    header_ax.add_patch(Rectangle((0, 0.45), 1, 0.1, color=THEME["teal"], lw=0))
+    header_ax.add_patch(Rectangle((0, 0.45), 1, 0.12, color=THEME["rule"], lw=0))
 
-    ax = fig.add_axes([0.06, 0.855, 0.88, 0.038])
+    ax = fig.add_axes([0.06, 0.855, 0.88, 0.048])
     ax.set_axis_off()
     ax.text(
         0.5,
@@ -807,10 +816,9 @@ def draw_report_title(fig, logos: list[Path]) -> None:
         "Whole Plasmid Sequencing Report",
         ha="center",
         va="center",
-        fontsize=18.5,
+        fontsize=20.5,
         fontweight="bold",
         color=THEME["title"],
-        family="DejaVu Serif",
     )
 
 
@@ -823,27 +831,62 @@ def draw_section_heading(fig, y: float, title: str) -> None:
 def draw_table(fig, bbox, headers, values, col_widths=None) -> None:
     ax = fig.add_axes(bbox)
     ax.set_axis_off()
-    table = ax.table(
-        cellText=[values],
-        colLabels=headers,
-        cellLoc="center",
-        colLoc="center",
-        loc="center",
-        bbox=[0, 0, 1, 1],
-        colWidths=col_widths,
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    if col_widths is None:
+        col_widths = [1 / len(headers)] * len(headers)
+    width_total = sum(col_widths) or 1
+    col_widths = [width / width_total for width in col_widths]
+
+    rounded_border = FancyBboxPatch(
+        (0.0, 0.0),
+        1.0,
+        1.0,
+        boxstyle="round,pad=0.004,rounding_size=0.035",
+        facecolor="white",
+        edgecolor=THEME["table_border"],
+        linewidth=2.2,
+        transform=ax.transAxes,
+        clip_on=False,
     )
-    table.auto_set_font_size(False)
-    table.set_fontsize(9.1)
-    table.scale(1, 1.95)
-    for (row, col), cell in table.get_celld().items():
-        cell.set_edgecolor(THEME["table_edge"])
-        cell.set_linewidth(0.8)
-        if row == 0:
-            cell.set_facecolor(THEME["table_header"])
-            cell.set_text_props(weight="bold", color="#333333", fontsize=8.6)
-        else:
-            cell.set_facecolor(THEME["table_body"])
-            cell.set_text_props(color="#333333", fontsize=9.1)
+    ax.add_patch(rounded_border)
+
+    grid_lines = []
+    header_y = 0.52
+    grid_lines.extend(ax.plot([0.0, 1.0], [header_y, header_y], color=THEME["table_grid"], linewidth=0.75))
+    x = 0.0
+    centers = []
+    for width in col_widths:
+        centers.append(x + width / 2)
+        x += width
+        if x < 0.999:
+            grid_lines.extend(ax.plot([x, x], [0.0, 1.0], color=THEME["table_grid"], linewidth=0.75))
+    for line in grid_lines:
+        line.set_clip_path(rounded_border)
+
+    for x_center, header, value in zip(centers, headers, values):
+        ax.text(
+            x_center,
+            0.74,
+            header,
+            ha="center",
+            va="center",
+            fontsize=9.7,
+            fontweight="bold",
+            color="#333333",
+            wrap=True,
+        )
+        ax.text(
+            x_center,
+            0.25,
+            value,
+            ha="center",
+            va="center",
+            fontsize=9.7,
+            color="#333333",
+            wrap=True,
+        )
 
 
 def draw_image(fig, bounds, image_path: Path) -> None:
@@ -853,16 +896,17 @@ def draw_image(fig, bounds, image_path: Path) -> None:
 
 
 def draw_footer(fig) -> None:
-    footer_ax = fig.add_axes([0.06, 0.03, 0.88, 0.035])
+    footer_ax = fig.add_axes([0.05, 0.026, 0.90, 0.045])
     footer_ax.set_axis_off()
+    footer_ax.add_patch(Rectangle((0, 0.86), 1, 0.035, color=THEME["rule"], lw=0))
     footer_ax.text(
         0.5,
-        0.5,
-        "Alta Biotech, LLC  |  2115 N Scranton St Ste 3040B, Aurora CO 80045  |  Tel: 720-640-9400  |  Support@altabiotech.com  |  www.altabiotech.com",
+        0.38,
+        "Alta Biotech, LLC \u2022 2115 N Scranton St, 3040B, Aurora CO 80045 \u2022 720-640-9400 \u2022 Support@altabiotech.com \u2022 www.altabiotech.com",
         ha="center",
         va="center",
-        fontsize=7.5,
-        color=THEME["muted"],
+        fontsize=8.0,
+        color="black",
     )
 
 
@@ -955,21 +999,22 @@ def render_pdf_report(
         draw_section_heading(fig, 0.785, "Sample & Order Information")
         draw_table(
             fig,
-            [0.07, 0.69, 0.86, 0.08],
-            ["Sample Name", "Order\nNumber", "Report\nDate"],
+            [0.035, 0.69, 0.93, 0.085],
+            ["Sample Name", "Lot Number", "Order Number", "Report Date"],
             [
                 metadata.get("sample_name") or sample_stem,
+                metadata.get("sample_id", ""),
                 metadata.get("order_number", "UNKNOWN"),
                 report_date_value(metadata),
             ],
-            col_widths=[0.50, 0.25, 0.25],
+            col_widths=[0.40, 0.18, 0.22, 0.20],
         )
 
         draw_section_heading(fig, 0.615, "Assembly Summary")
         draw_table(
             fig,
-            [0.07, 0.52, 0.86, 0.08],
-            ["Contig Length\n(bp)", "Bases Mapped", "Reads Mapped", "E. coli DNA %", "Is Circular?"],
+            [0.04, 0.52, 0.92, 0.08],
+            ["Contig Length (bp)", "Bases Mapped", "Reads Mapped", "Host DNA %", "Is Circular?"],
             [
                 f"{contig['length_bp']:,}",
                 f"{assembly.get('bases_mapped', 0):,} ({assembly.get('bases_mapped_pct', 0):.2f}%)",
@@ -982,8 +1027,8 @@ def render_pdf_report(
         draw_section_heading(fig, 0.445, "Nanopore Performance")
         draw_table(
             fig,
-            [0.07, 0.35, 0.86, 0.08],
-            ["Mean Read\nDepth", "Min/Max Depth", "Mean\nCoverage", "Low Confidence\nCount", "Single Contig?"],
+            [0.035, 0.35, 0.93, 0.08],
+            ["Mean Read Depth", "Min/Max Depth", "Coverage", "Low Confidence Reads", "Single Contig?"],
             [
                 f"{round(coverage.get('mean_depth', 0)):,}",
                 f"{coverage.get('min_depth', 0):,} / {coverage.get('max_depth', 0):,}",
@@ -991,16 +1036,18 @@ def render_pdf_report(
                 f"{coverage.get('low_confidence_count', 0):,}",
                 format_yes_no(assembly.get("single_contig")),
             ],
+            col_widths=[0.20, 0.20, 0.20, 0.23, 0.17],
         )
 
         draw_section_heading(fig, 0.275, "Multimer Analysis")
         draw_table(
             fig,
-            [0.07, 0.18, 0.86, 0.08],
+            [0.035, 0.18, 0.93, 0.08],
             multimer_headers,
             [format_percent(value) for value in multimer_values],
             col_widths=multimer_widths,
         )
+        draw_footer(fig)
 
         pdf.savefig(fig)
         plt.close(fig)
@@ -1011,25 +1058,39 @@ def render_pdf_report(
 
         draw_section_heading(fig, 0.785, "Coverage & Distribution Maps")
 
-        cov_head = fig.add_axes([0.08, 0.735, 0.84, 0.04])
+        cov_head = fig.add_axes([0.055, 0.705, 0.84, 0.04])
         cov_head.set_axis_off()
-        cov_head.text(0.0, 0.7, "Coverage Map", ha="left", va="center", fontsize=11.5, fontweight="bold", color=THEME["heading"])
-        cov_head.text(
-            0.0,
-            0.15,
+        cov_head.text(0.0, 0.5, "Coverage Map", ha="left", va="center", fontsize=12.5, fontweight="bold", color="#335F91")
+        draw_image(fig, [0.18, 0.465, 0.64, 0.23], coverage_png)
+        cov_note = fig.add_axes([0.18, 0.43, 0.64, 0.03])
+        cov_note.set_axis_off()
+        cov_note.text(
+            0.5,
+            0.5,
             'low confidence positions are marked with orange "X"',
-            ha="left",
+            ha="center",
             va="center",
-            fontsize=9,
-            color=THEME["muted"],
+            fontsize=10,
+            color="#666666",
             style="italic",
         )
-        draw_image(fig, [0.08, 0.47, 0.84, 0.23], coverage_png)
 
-        dist_head = fig.add_axes([0.08, 0.39, 0.84, 0.04])
+        dist_head = fig.add_axes([0.055, 0.345, 0.84, 0.04])
         dist_head.set_axis_off()
-        dist_head.text(0.0, 0.5, "Read Length Distribution", ha="left", va="center", fontsize=11.5, fontweight="bold", color=THEME["heading"])
-        draw_image(fig, [0.08, 0.095, 0.84, 0.255], read_length_bases_png)
+        dist_head.text(0.0, 0.5, "Read Length Distribution", ha="left", va="center", fontsize=12.5, fontweight="bold", color="#335F91")
+        draw_image(fig, [0.18, 0.09, 0.64, 0.255], read_length_bases_png)
+        dist_note = fig.add_axes([0.18, 0.068, 0.64, 0.018])
+        dist_note.set_axis_off()
+        dist_note.text(
+            0.5,
+            0.5,
+            f"reads <= {READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP:,} bp omitted from this display",
+            ha="center",
+            va="center",
+            fontsize=7.5,
+            color="#666666",
+            style="italic",
+        )
         draw_footer(fig)
 
         pdf.savefig(fig)
@@ -1042,6 +1103,8 @@ def collect_logos(paths: Iterable[str]) -> list[Path]:
         path = Path(item)
         if path.exists():
             logos.append(path)
+    if not logos and DEFAULT_LOGO_PATH.exists():
+        logos.append(DEFAULT_LOGO_PATH)
     return logos
 
 
