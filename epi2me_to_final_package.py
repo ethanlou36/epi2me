@@ -38,7 +38,8 @@ matplotlib.use("Agg")
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.patches import FancyBboxPatch, Patch, Rectangle
+from matplotlib.path import Path as MplPath
+from matplotlib.patches import Patch, PathPatch, Rectangle
 import numpy as np
 import pysam
 
@@ -828,6 +829,53 @@ def draw_section_heading(fig, y: float, title: str) -> None:
     ax.text(0.5, 0.5, title, ha="center", va="center", fontsize=13.5, fontweight="bold", color=THEME["heading"])
 
 
+def rounded_table_path(fig, bbox, radius_y=0.34) -> MplPath:
+    width_in = bbox[2] * fig.get_figwidth()
+    height_in = bbox[3] * fig.get_figheight()
+    radius_y = min(radius_y, 0.49)
+    radius_x = min(radius_y * height_in / width_in, 0.49) if width_in else radius_y
+    kappa = 0.5522847498
+    vertices = [
+        (radius_x, 0.0),
+        (1.0 - radius_x, 0.0),
+        (1.0 - radius_x + kappa * radius_x, 0.0),
+        (1.0, radius_y - kappa * radius_y),
+        (1.0, radius_y),
+        (1.0, 1.0 - radius_y),
+        (1.0, 1.0 - radius_y + kappa * radius_y),
+        (1.0 - radius_x + kappa * radius_x, 1.0),
+        (1.0 - radius_x, 1.0),
+        (radius_x, 1.0),
+        (radius_x - kappa * radius_x, 1.0),
+        (0.0, 1.0 - radius_y + kappa * radius_y),
+        (0.0, 1.0 - radius_y),
+        (0.0, radius_y),
+        (0.0, radius_y - kappa * radius_y),
+        (radius_x - kappa * radius_x, 0.0),
+        (radius_x, 0.0),
+    ]
+    codes = [
+        MplPath.MOVETO,
+        MplPath.LINETO,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.LINETO,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.LINETO,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.LINETO,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+    ]
+    return MplPath(vertices, codes)
+
+
 def draw_table(fig, bbox, headers, values, col_widths=None) -> None:
     ax = fig.add_axes(bbox)
     ax.set_axis_off()
@@ -839,11 +887,8 @@ def draw_table(fig, bbox, headers, values, col_widths=None) -> None:
     width_total = sum(col_widths) or 1
     col_widths = [width / width_total for width in col_widths]
 
-    rounded_border = FancyBboxPatch(
-        (0.0, 0.0),
-        1.0,
-        1.0,
-        boxstyle="round,pad=0.004,rounding_size=0.035",
+    rounded_border = PathPatch(
+        rounded_table_path(fig, bbox),
         facecolor="white",
         edgecolor=THEME["table_border"],
         linewidth=2.2,
@@ -872,7 +917,7 @@ def draw_table(fig, bbox, headers, values, col_widths=None) -> None:
             header,
             ha="center",
             va="center",
-            fontsize=9.7,
+            fontsize=9.2,
             fontweight="bold",
             color="#333333",
             wrap=True,
@@ -883,7 +928,7 @@ def draw_table(fig, bbox, headers, values, col_widths=None) -> None:
             value,
             ha="center",
             va="center",
-            fontsize=9.7,
+            fontsize=9.2,
             color="#333333",
             wrap=True,
         )
