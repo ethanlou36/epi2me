@@ -46,6 +46,7 @@ example_data/*_report_output/
 # Generated report/package file types
 *.ab1
 *.pdf
+!barcode01_example_report.pdf
 *.png
 
 # Generated summaries and per-base outputs
