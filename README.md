@@ -93,8 +93,9 @@ example, a row with `Barcode #` equal to `1` matches `barcode01`.
 The barcode does not need leading zeroes in the sheet: `3`, `03`, `3.0`, and
 `barcode3` all match files named `barcode03...`.
 
-You do not need to rename the metadata file. The input folder must contain
-exactly one metadata `.xlsx`, `.csv`, or `.tsv` file.
+The metadata file should be named `WPS Working Sheet` or something very similar,
+such as `WPS_Working_Sheet_2026_04_29.xlsx`. The input folder must contain
+exactly one matching metadata `.xlsx`, `.csv`, or `.tsv` file.
 
 ## 4. Run Report
 

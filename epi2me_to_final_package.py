@@ -317,21 +317,42 @@ def canonicalize_metadata_row(row: dict[str, str]) -> dict[str, str]:
     return result
 
 
+def metadata_name_score(path: Path) -> int:
+    name = normalize_header(path.stem)
+    has_wps = "wps" in name
+    has_working = "working" in name
+    has_sheet = "sheet" in name
+    if has_wps and has_working and has_sheet:
+        return 3
+    if has_working and has_sheet:
+        return 2
+    if has_wps and has_sheet:
+        return 1
+    return 0
+
+
 def resolve_metadata_path(path: Path) -> Path:
     if path.is_dir():
-        candidates = sorted(
+        spreadsheet_candidates = sorted(
             item
             for item in path.iterdir()
             if item.is_file()
             and item.suffix.lower() in {".xlsx", ".csv", ".tsv"}
             and not item.name.startswith("~$")
         )
+        candidates = [item for item in spreadsheet_candidates if metadata_name_score(item) > 0]
         if not candidates:
-            raise ValueError(f"No metadata .xlsx, .csv, or .tsv file found in {path}")
-        if len(candidates) > 1:
-            names = ", ".join(item.name for item in candidates)
-            raise ValueError(f"Multiple metadata files found in {path}: {names}")
-        return candidates[0].resolve()
+            names = ", ".join(item.name for item in spreadsheet_candidates)
+            detail = f" Found: {names}" if names else ""
+            raise ValueError(
+                f"No WPS Working Sheet metadata .xlsx, .csv, or .tsv file found in {path}.{detail}"
+            )
+        best_score = max(metadata_name_score(item) for item in candidates)
+        best_candidates = [item for item in candidates if metadata_name_score(item) == best_score]
+        if len(best_candidates) > 1:
+            names = ", ".join(item.name for item in best_candidates)
+            raise ValueError(f"Multiple WPS Working Sheet metadata files found in {path}: {names}")
+        return best_candidates[0].resolve()
     return path.resolve()
 
 
@@ -1388,7 +1409,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             f"Name of the folder under {INPUT_ROOT} containing all run inputs: "
             "barcodeXX.final.fasta/fa, barcodeXX.annotations.gbk, raw/unmapped BAMs, "
-            "barcodeXX.final.fastq/fq, optional MAF files, and exactly one metadata CSV, TSV, or XLSX file. "
+            "barcodeXX.final.fastq/fq, optional MAF files, and exactly one WPS Working Sheet metadata CSV, TSV, or XLSX file. "
             "Missing FASTQ files warn but do not stop packaging. "
             "BAMs may be directly inside it or inside barcodeXX subfolders."
         ),
