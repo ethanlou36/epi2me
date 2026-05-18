@@ -97,7 +97,43 @@ The metadata file should be named `WPS Working Sheet` or something very similar,
 such as `WPS_Working_Sheet_2026_04_29.xlsx`. The input folder must contain
 exactly one matching metadata `.xlsx`, `.csv`, or `.tsv` file.
 
-## 4. Run Report
+## 4. Mixed-Contig Samples
+
+Mixed or contaminated samples can produce more than one contig for the same
+barcode and metadata row. The script handles this by generating one report and
+one output file set per contig.
+
+The clearest input style is to include an explicit contig suffix in each
+contig-specific filename:
+
+```text
+C:\WPS data\Run_2026_04_29\
+  barcode01.contig001.final.fasta
+  barcode01.contig002.final.fasta
+  barcode01.contig001.annotations.gbk
+  barcode01.contig002.annotations.gbk
+  FBD...barcode01...bam
+  barcode01.final.fastq
+  WPS_Working_Sheet_2026_04_29.xlsx
+```
+
+This produces separate outputs such as `sample_contig001.fa`,
+`sample_contig002.fa`, and one report PDF per contig. A single barcode-level
+BAM or FASTQ is reused for each contig. Contig-specific BAM, FASTQ, or MAF files
+are also supported when their filenames include the same `contig001`,
+`contig002`, etc. suffix.
+
+The script also has a looser fallback for files that do not include contig
+suffixes. If multiple `final` FASTA files are found for the same barcode, it
+prints that it thinks the sample has multiple contigs and assigns `contig001`,
+`contig002`, etc. in sorted filename order. If there are also multiple
+unlabelled GenBank, BAM, FASTQ, or MAF files with the same barcode, they are
+paired to those inferred contigs by the same sorted order when the counts match.
+
+Explicit contig suffixes are still safer when possible, because sorted filename
+order is only a fallback.
+
+## 5. Run Report
 
 Example command:
 
@@ -149,7 +185,8 @@ Common causes:
 
 - The barcode exists in EPI2ME files but not in the WPS sheet.
 - The WPS sheet has a barcode row but the matching EPI2ME files are missing.
-- More than one BAM file was found for the same barcode.
+- More than one unpaired file of the same type was found for the same barcode.
+  Use `contig001`, `contig002`, etc. in filenames for mixed-contig samples.
 - The BAM is already aligned instead of raw/unmapped.
 - Two samples produce the same filename after cleanup.
 

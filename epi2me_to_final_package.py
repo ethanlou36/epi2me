@@ -407,23 +407,104 @@ def group_packaged_by_order(packaged: list[dict[str, object]]) -> dict[str, dict
     return grouped
 
 
+def contig_label_from_filename(path: Path) -> str | None:
+    match = re.search(r"contig[\s_-]*0*(\d+)", path.stem, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return f"contig{int(match.group(1)):03d}"
+
+
+def record_id_for_barcode(barcode: str, contig_label: str | None = None) -> str:
+    return f"{barcode}__{contig_label}" if contig_label else barcode
+
+
+def sample_stem_for_record(barcode: str, metadata: dict[str, str], contig_label: str | None = None) -> str:
+    base = slugify(metadata.get("sample_name") or barcode)
+    return f"{base}_{contig_label}" if contig_label else base
+
+
 def add_discovered_file(
-    records: dict[str, dict[str, Path]],
+    records: dict[str, dict[str, object]],
     discovery_errors: list[dict[str, str]],
     barcode: str,
     key: str,
     path: Path,
+    contig_label: str | None = None,
 ) -> None:
-    existing = records[barcode].get(key)
+    record_id = record_id_for_barcode(barcode, contig_label)
+    records[record_id]["barcode"] = barcode
+    if contig_label:
+        records[record_id]["contig_label"] = contig_label
+    existing = records[record_id].get(key)
     if existing is not None:
         discovery_errors.append(
             {
                 "barcode": barcode,
-                "reason": f"multiple {key} files found: {existing}, {path}",
+                "record_id": record_id,
+                "reason": f"multiple {key} files found for {record_id}: {existing}, {path}",
             }
         )
     else:
-        records[barcode][key] = path
+        records[record_id][key] = path
+
+
+def contig_labels_for_barcode(records: dict[str, dict[str, object]], barcode: str) -> list[str]:
+    labels = {
+        record.get("contig_label")
+        for record in records.values()
+        if record.get("barcode") == barcode and isinstance(record.get("contig_label"), str)
+    }
+    return sorted(label for label in labels if isinstance(label, str))
+
+
+def add_grouped_discovered_files(
+    records: dict[str, dict[str, object]],
+    discovery_errors: list[dict[str, str]],
+    barcode: str,
+    key: str,
+    paths: list[Path],
+) -> None:
+    by_label: dict[str | None, list[Path]] = defaultdict(list)
+    for path in sorted(paths):
+        by_label[contig_label_from_filename(path)].append(path)
+
+    for contig_label, labelled_paths in sorted(
+        ((label, group) for label, group in by_label.items() if label is not None),
+        key=lambda item: item[0] or "",
+    ):
+        for path in labelled_paths:
+            add_discovered_file(records, discovery_errors, barcode, key, path, contig_label)
+
+    unlabelled = by_label.get(None, [])
+    if not unlabelled:
+        return
+    if len(unlabelled) == 1:
+        add_discovered_file(records, discovery_errors, barcode, key, unlabelled[0])
+        return
+
+    existing_labels = contig_labels_for_barcode(records, barcode)
+    if key == "fasta" and not existing_labels:
+        print(
+            f"detected multiple FASTA files for {barcode}; treating this as a likely mixed-contig sample "
+            f"with {len(unlabelled)} contigs"
+        )
+        for index, path in enumerate(unlabelled, start=1):
+            add_discovered_file(records, discovery_errors, barcode, key, path, f"contig{index:03d}")
+        return
+
+    if existing_labels and len(existing_labels) == len(unlabelled):
+        print(
+            f"detected multiple {key} files for {barcode}; pairing them with inferred mixed-contig labels "
+            f"{', '.join(existing_labels)}"
+        )
+        for contig_label, path in zip(existing_labels, unlabelled):
+            add_discovered_file(records, discovery_errors, barcode, key, path, contig_label)
+        return
+
+    first, *rest = unlabelled
+    add_discovered_file(records, discovery_errors, barcode, key, first)
+    for path in rest:
+        add_discovered_file(records, discovery_errors, barcode, key, path)
 
 
 def barcode_from_filename(path: Path) -> str | None:
@@ -438,7 +519,7 @@ def barcode_from_filename(path: Path) -> str | None:
 
 
 def discover_files_for_key(
-    records: dict[str, dict[str, Path]],
+    records: dict[str, dict[str, object]],
     discovery_errors: list[dict[str, str]],
     key: str,
     directory: Path,
@@ -448,13 +529,16 @@ def discover_files_for_key(
         raise ValueError(f"{key} directory does not exist: {directory}")
     if not directory.is_dir():
         raise ValueError(f"{key} path is not a directory: {directory}")
+    grouped: dict[str, list[Path]] = defaultdict(list)
     for path in directory.iterdir():
         if not path.is_file():
             continue
         barcode = matcher(path)
         if barcode is None:
             continue
-        add_discovered_file(records, discovery_errors, barcode, key, path)
+        grouped[barcode].append(path)
+    for barcode, paths in sorted(grouped.items()):
+        add_grouped_discovered_files(records, discovery_errors, barcode, key, paths)
 
 
 def match_barcode_file(path: Path, extensions: set[str], required_terms: set[str] | None = None) -> str | None:
@@ -493,7 +577,7 @@ def infer_bam_barcode(path: Path) -> tuple[str | None, str | None]:
 
 
 def discover_bam_files(
-    records: dict[str, dict[str, Path]],
+    records: dict[str, dict[str, object]],
     discovery_errors: list[dict[str, str]],
     directory: Path,
     exclude_dirs: Iterable[Path] | None = None,
@@ -509,6 +593,7 @@ def discover_bam_files(
         if path.resolve() != directory.resolve()
     ]
 
+    grouped: dict[str, list[Path]] = defaultdict(list)
     for path in directory.rglob("*.bam"):
         if not path.is_file():
             continue
@@ -523,7 +608,35 @@ def discover_bam_files(
             continue
         if barcode is None:
             continue
-        add_discovered_file(records, discovery_errors, barcode, "bam", path)
+        grouped[barcode].append(path)
+    for barcode, paths in sorted(grouped.items()):
+        add_grouped_discovered_files(records, discovery_errors, barcode, "bam", paths)
+
+
+def expand_shared_barcode_files(records: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
+    by_barcode: dict[str, list[str]] = defaultdict(list)
+    for record_id, record in records.items():
+        barcode = record.get("barcode")
+        if isinstance(barcode, str):
+            by_barcode[barcode].append(record_id)
+
+    expanded = dict(records)
+    for barcode, record_ids in by_barcode.items():
+        contig_record_ids = [rid for rid in record_ids if expanded[rid].get("contig_label")]
+        if not contig_record_ids:
+            continue
+        shared_record = expanded.get(barcode)
+        if not shared_record:
+            continue
+        for key in ("bam", "fastq", "maf"):
+            shared_value = shared_record.get(key)
+            if shared_value is None:
+                continue
+            for record_id in contig_record_ids:
+                expanded[record_id].setdefault(key, shared_value)
+        if not any(key in shared_record for key in ("fasta", "gbk")):
+            expanded.pop(barcode, None)
+    return expanded
 
 
 def discover_input_records(
@@ -533,8 +646,8 @@ def discover_input_records(
     fastq_dir: Path | None = None,
     maf_dir: Path | None = None,
     exclude_dirs: Iterable[Path] | None = None,
-) -> tuple[dict[str, dict[str, Path]], list[dict[str, str]]]:
-    records: dict[str, dict[str, Path]] = defaultdict(dict)
+) -> tuple[dict[str, dict[str, object]], list[dict[str, str]]]:
+    records: dict[str, dict[str, object]] = defaultdict(dict)
     discovery_errors: list[dict[str, str]] = []
     discover_files_for_key(
         records,
@@ -567,7 +680,7 @@ def discover_input_records(
             maf_dir,
             lambda path: match_barcode_file(path, {".maf"}, {"assembly"}),
         )
-    return dict(records), discovery_errors
+    return expand_shared_barcode_files(dict(records)), discovery_errors
 
 
 def sample_stem_for_barcode(barcode: str, metadata: dict[str, str]) -> str:
@@ -575,27 +688,35 @@ def sample_stem_for_barcode(barcode: str, metadata: dict[str, str]) -> str:
 
 
 def find_sample_stem_collisions(
-    records: dict[str, dict[str, Path]],
+    records: dict[str, dict[str, object]],
     metadata_lookup: dict[str, dict[str, str]],
     requested: set[str] | None,
-    invalid_barcodes: set[str],
+    invalid_record_ids: set[str],
 ) -> dict[str, str]:
     stems: dict[str, list[str]] = defaultdict(list)
-    for barcode in records:
+    for record_id, record in records.items():
+        barcode = record.get("barcode")
+        if not isinstance(barcode, str):
+            continue
         if requested is not None and barcode not in requested:
             continue
-        if barcode in invalid_barcodes:
+        if record_id in invalid_record_ids:
             continue
         if metadata_lookup and barcode not in metadata_lookup:
             continue
-        stem = sample_stem_for_barcode(barcode, metadata_lookup.get(barcode, {}))
-        stems[stem].append(barcode)
+        contig_label = record.get("contig_label")
+        stem = sample_stem_for_record(
+            barcode,
+            metadata_lookup.get(barcode, {}),
+            contig_label if isinstance(contig_label, str) else None,
+        )
+        stems[stem].append(record_id)
     collisions = {}
-    for stem, barcodes in stems.items():
-        if len(barcodes) > 1:
-            joined = ", ".join(sorted(barcodes))
-            for barcode in barcodes:
-                collisions[barcode] = f"sample name collision after slugify: {stem!r} used by {joined}"
+    for stem, record_ids in stems.items():
+        if len(record_ids) > 1:
+            joined = ", ".join(sorted(record_ids))
+            for record_id in record_ids:
+                collisions[record_id] = f"sample name collision after slugify: {stem!r} used by {joined}"
     return collisions
 
 
@@ -645,7 +766,7 @@ def generate_ab1_files(
     fasta_path: Path,
     fastq_path: Path | None,
     output_dir: Path,
-    sample_stem: str,
+    output_stem: str,
 ) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     record = read_first_fasta_record(fasta_path)
@@ -668,15 +789,15 @@ def generate_ab1_files(
     )
 
     for stale_name in (
-        f"{sample_stem}_contig_trace.ab1",
-        f"{sample_stem}_contig_trace1.ab1",
-        f"{sample_stem}_contig_trace2.ab1",
+        f"{output_stem}_trace.ab1",
+        f"{output_stem}_trace1.ab1",
+        f"{output_stem}_trace2.ab1",
     ):
         stale_path = output_dir / stale_name
         if stale_path.exists():
             stale_path.unlink()
 
-    out_ab1 = output_dir / f"{sample_stem}_contig_trace.ab1"
+    out_ab1 = output_dir / f"{output_stem}_trace.ab1"
     write_real_ab1(out_ab1, traces, peak_locs, seq, q_scores)
     return [out_ab1]
 
@@ -1242,7 +1363,7 @@ def remove_empty_package_dirs(order_dir: Path) -> None:
         pass
 
 
-def cleanup_previous_barcode_output(output_root: Path, barcode: str, sample_stem: str) -> None:
+def cleanup_previous_sample_output(output_root: Path, barcode: str, sample_stem: str) -> None:
     work_root = output_root / "_work"
     touched_order_dirs: set[Path] = set()
     if work_root.exists():
@@ -1251,7 +1372,7 @@ def cleanup_previous_barcode_output(output_root: Path, barcode: str, sample_stem
                 summary = json.loads(summary_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if summary.get("barcode") != barcode:
+            if summary.get("sample_name") != sample_stem:
                 continue
             paths = summary.get("paths") or {}
             order_dir = paths.get("order_dir")
@@ -1286,8 +1407,8 @@ def cleanup_previous_barcode_output(output_root: Path, barcode: str, sample_stem
 
 
 def package_sample(
-    barcode: str,
-    record: dict[str, Path],
+    record_id: str,
+    record: dict[str, object],
     metadata: dict[str, str],
     output_root: Path,
     logos: list[Path],
@@ -1297,18 +1418,36 @@ def package_sample(
     allow_aligned_input: bool = False,
     multimer_denominator: str = DEFAULT_MULTIMER_DENOMINATOR,
 ) -> dict[str, object]:
+    barcode = record.get("barcode")
+    if not isinstance(barcode, str):
+        raise ValueError(f"record {record_id} is missing barcode")
+    contig_label_value = record.get("contig_label")
+    contig_label = contig_label_value if isinstance(contig_label_value, str) else None
     sample_name = metadata.get("sample_name") or barcode
-    sample_stem = sample_stem_for_barcode(barcode, metadata)
-    sequence_name = f"{sample_stem}_contig"
+    sample_stem = sample_stem_for_record(barcode, metadata, contig_label)
+    output_stem = sample_stem if contig_label else f"{sample_stem}_contig"
+    sequence_name = output_stem
     order_number = metadata.get("order_number")
     if not order_number:
         raise ValueError("metadata is missing order_number; refusing to package under WPS Data_Order #UNKNOWN")
-    fasta_record_count = count_fasta_records(record["fasta"])
+    fasta_path = record["fasta"]
+    gbk_path = record["gbk"]
+    bam_path = record["bam"]
+    fastq_path = record.get("fastq")
+    maf_path = record.get("maf")
+    if not isinstance(fasta_path, Path) or not isinstance(gbk_path, Path) or not isinstance(bam_path, Path):
+        raise ValueError(f"record {record_id} has invalid required file paths")
+    if fastq_path is not None and not isinstance(fastq_path, Path):
+        raise ValueError(f"record {record_id} has invalid FASTQ path")
+    if maf_path is not None and not isinstance(maf_path, Path):
+        raise ValueError(f"record {record_id} has invalid MAF path")
+
+    fasta_record_count = count_fasta_records(fasta_path)
     if fasta_record_count != 1:
         raise ValueError(f"expected exactly one FASTA record for {barcode}, found {fasta_record_count}")
 
     order_dir = output_root / f"WPS Data_Order #{order_number}"
-    cleanup_previous_barcode_output(output_root, barcode, sample_stem)
+    cleanup_previous_sample_output(output_root, barcode, sample_stem)
     package_dirs = {name: order_dir / subdir for name, subdir in PACKAGE_SUBDIRS.items()}
     for path in package_dirs.values():
         path.mkdir(parents=True, exist_ok=True)
@@ -1316,14 +1455,14 @@ def package_sample(
     work_dir = output_root / "_work" / sample_stem
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    fasta_out = package_dirs["fasta"] / f"{sample_stem}_contig.fa"
-    gbk_out = package_dirs["gbk"] / f"{sample_stem}_contig.gbk"
-    renamed = write_renamed_fasta(record["fasta"], fasta_out, sequence_name)
-    rewrite_genbank_locus(record["gbk"], gbk_out, sequence_name)
+    fasta_out = package_dirs["fasta"] / f"{output_stem}.fa"
+    gbk_out = package_dirs["gbk"] / f"{output_stem}.gbk"
+    renamed = write_renamed_fasta(fasta_path, fasta_out, sequence_name)
+    rewrite_genbank_locus(gbk_path, gbk_out, sequence_name)
 
     alignment_dir = work_dir / "alignment"
     alignment_result = run_pipeline(
-        record["bam"],
+        bam_path,
         fasta_out,
         alignment_dir,
         minimap2_preset="map-ont",
@@ -1343,7 +1482,7 @@ def package_sample(
         contig_fasta=fasta_out,
         out_dir=report_dir,
         reference_fasta=fasta_out,
-        maf_path=record.get("maf"),
+        maf_path=maf_path,
         gbk_path=gbk_out,
         sample_name=sample_stem,
         low_confidence_qscore=LOW_CONFIDENCE_QSCORE,
@@ -1358,15 +1497,15 @@ def package_sample(
     feature_map_value = report_summary["outputs"].get("feature_map_png")
     feature_map_png = find_existing_path([Path(feature_map_value)]) if feature_map_value else None
 
-    per_base_dst = package_dirs["per_base"] / f"{sample_stem}_contig_per_base_details.csv"
-    low_conf_dst = package_dirs["per_base"] / f"{sample_stem}_contig_low_confidence_bases.csv"
+    per_base_dst = package_dirs["per_base"] / f"{output_stem}_per_base_details.csv"
+    low_conf_dst = package_dirs["per_base"] / f"{output_stem}_low_confidence_bases.csv"
     shutil.copyfile(per_base_src, per_base_dst)
     shutil.copyfile(low_conf_src, low_conf_dst)
 
-    ab1_paths = generate_ab1_files(fasta_out, record.get("fastq"), package_dirs["ab1"], sample_stem)
+    ab1_paths = generate_ab1_files(fasta_out, fastq_path, package_dirs["ab1"], output_stem)
 
     bases_plot = plot_read_length_vs_bases(
-        record["bam"],
+        bam_path,
         aligned_bam,
         renamed["length_bp"],
         work_dir / "read_length_vs_bases.png",
@@ -1389,6 +1528,8 @@ def package_sample(
         json.dumps(
             {
                 "barcode": barcode,
+                "record_id": record_id,
+                "contig_label": contig_label,
                 "sample_name": sample_stem,
                 "order_number": order_number,
                 "multimer_denominator": multimer_denominator,
@@ -1412,6 +1553,8 @@ def package_sample(
 
     return {
         "barcode": barcode,
+        "record_id": record_id,
+        "contig_label": contig_label,
         "sample_name": sample_stem,
         "order_number": order_number,
         "order_dir": str(order_dir),
@@ -1429,6 +1572,7 @@ def parse_args() -> argparse.Namespace:
             f"Name of the folder under {INPUT_ROOT} containing all run inputs: "
             "barcodeXX.final.fasta/fa, barcodeXX.annotations.gbk, raw/unmapped BAMs, "
             "barcodeXX.final.fastq/fq, optional MAF files, and exactly one WPS Working Sheet metadata CSV, TSV, or XLSX file. "
+            "Mixed-contig samples may use barcodeXX.contig001.final.fasta/fa and matching contig labels on related files. "
             "Missing FASTQ files warn but do not stop packaging. "
             "BAMs may be directly inside it or inside barcodeXX subfolders."
         ),
@@ -1515,44 +1659,64 @@ def main() -> None:
     logos = collect_logos(args.logo)
     packaged = []
     skipped = list(discovery_errors)
-    invalid_barcodes = {item["barcode"] for item in discovery_errors}
-    considered_barcodes = set(records)
+    invalid_record_ids = {item.get("record_id", item["barcode"]) for item in discovery_errors}
+    invalid_barcodes = {
+        item["barcode"]
+        for item in discovery_errors
+        if item.get("record_id", item["barcode"]) == item["barcode"]
+    }
+    considered_record_ids = set(records)
     if requested is not None:
-        considered_barcodes &= requested
+        considered_record_ids = {
+            record_id
+            for record_id in considered_record_ids
+            if isinstance(records[record_id].get("barcode"), str) and records[record_id]["barcode"] in requested
+        }
 
-    sample_stem_collisions = find_sample_stem_collisions(records, metadata_lookup, requested, invalid_barcodes)
-    for barcode, reason in sorted(sample_stem_collisions.items()):
-        skipped.append({"barcode": barcode, "reason": reason})
-    invalid_barcodes.update(sample_stem_collisions)
+    sample_stem_collisions = find_sample_stem_collisions(records, metadata_lookup, requested, invalid_record_ids)
+    for record_id, reason in sorted(sample_stem_collisions.items()):
+        record = records.get(record_id, {})
+        barcode = record.get("barcode", record_id)
+        skipped.append({"barcode": str(barcode), "record_id": record_id, "reason": reason})
+    invalid_record_ids.update(sample_stem_collisions)
 
-    for barcode in sorted(considered_barcodes):
-        if barcode in invalid_barcodes:
+    record_barcodes = {record["barcode"] for record in records.values() if isinstance(record.get("barcode"), str)}
+    for record_id in sorted(considered_record_ids):
+        record = records[record_id]
+        barcode = record.get("barcode")
+        if not isinstance(barcode, str):
+            continue
+        if record_id in invalid_record_ids or barcode in invalid_barcodes:
             continue
         if metadata_lookup and barcode not in metadata_lookup:
-            skipped.append({"barcode": barcode, "reason": "barcode not present in metadata"})
+            skipped.append({"barcode": barcode, "record_id": record_id, "reason": "barcode not present in metadata"})
 
-    for barcode in sorted(set(metadata_lookup) - set(records)):
+    for barcode in sorted(set(metadata_lookup) - record_barcodes):
         if requested is not None and barcode not in requested:
             continue
         skipped.append({"barcode": barcode, "reason": "metadata row has no matching EPI2ME files"})
 
-    for barcode in sorted(records):
+    for record_id in sorted(records):
+        record = records[record_id]
+        barcode = record.get("barcode")
+        if not isinstance(barcode, str):
+            skipped.append({"barcode": record_id, "record_id": record_id, "reason": "record is missing barcode"})
+            continue
         if requested is not None and barcode not in requested:
             continue
-        if barcode in invalid_barcodes:
+        if record_id in invalid_record_ids or barcode in invalid_barcodes:
             continue
         if metadata_lookup and barcode not in metadata_lookup:
             continue
-        record = records[barcode]
         missing = [key for key in ("fasta", "gbk", "bam") if key not in record]
         if missing:
-            skipped.append({"barcode": barcode, "reason": f"missing required files: {', '.join(missing)}"})
+            skipped.append({"barcode": barcode, "record_id": record_id, "reason": f"missing required files: {', '.join(missing)}"})
             continue
         metadata = metadata_lookup.get(barcode, {})
         try:
             packaged.append(
                 package_sample(
-                    barcode,
+                    record_id,
                     record,
                     metadata,
                     output_dir,
@@ -1565,9 +1729,9 @@ def main() -> None:
                 )
             )
         except subprocess.CalledProcessError as exc:
-            skipped.append({"barcode": barcode, "reason": f"command failed ({exc.returncode}): {' '.join(map(str, exc.cmd))}"})
+            skipped.append({"barcode": barcode, "record_id": record_id, "reason": f"command failed ({exc.returncode}): {' '.join(map(str, exc.cmd))}"})
         except Exception as exc:
-            skipped.append({"barcode": barcode, "reason": str(exc)})
+            skipped.append({"barcode": barcode, "record_id": record_id, "reason": str(exc)})
 
     grouped_orders = group_packaged_by_order(packaged)
 
@@ -1593,11 +1757,11 @@ def main() -> None:
     for order_number, order in sorted(grouped_orders.items()):
         print(f"order: {order_number} -> {order['order_dir']} ({order['sample_count']} sample(s))")
     for item in packaged:
-        print(f"packaged: {item['barcode']} -> {item['order_dir']}")
+        print(f"packaged: {item.get('record_id', item['barcode'])} -> {item['order_dir']}")
         for warning in item.get("warnings", []):
-            print(f"warning: {item['barcode']} ({warning})")
+            print(f"warning: {item.get('record_id', item['barcode'])} ({warning})")
     for item in skipped:
-        print(f"skipped: {item['barcode']} ({item['reason']})")
+        print(f"skipped: {item.get('record_id', item['barcode'])} ({item['reason']})")
 
 
 if __name__ == "__main__":
