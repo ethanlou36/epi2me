@@ -426,12 +426,23 @@ def add_discovered_file(
         records[barcode][key] = path
 
 
+def barcode_from_filename(path: Path) -> str | None:
+    matches = {
+        normalize_barcode(match)
+        for match in re.findall(r"barcode\s*#?\s*0*\d+|barcode\d+", path.name, flags=re.IGNORECASE)
+    }
+    matches = {barcode for barcode in matches if barcode is not None}
+    if len(matches) == 1:
+        return next(iter(matches))
+    return None
+
+
 def discover_files_for_key(
     records: dict[str, dict[str, Path]],
     discovery_errors: list[dict[str, str]],
     key: str,
     directory: Path,
-    pattern: re.Pattern,
+    matcher,
 ) -> None:
     if not directory.exists():
         raise ValueError(f"{key} directory does not exist: {directory}")
@@ -440,11 +451,19 @@ def discover_files_for_key(
     for path in directory.iterdir():
         if not path.is_file():
             continue
-        match = pattern.match(path.name)
-        if not match:
+        barcode = matcher(path)
+        if barcode is None:
             continue
-        barcode = normalize_barcode(match.group(1))
         add_discovered_file(records, discovery_errors, barcode, key, path)
+
+
+def match_barcode_file(path: Path, extensions: set[str], required_terms: set[str] | None = None) -> str | None:
+    if path.suffix.lower() not in extensions:
+        return None
+    name = normalize_header(path.stem)
+    if required_terms and not all(term in name for term in required_terms):
+        return None
+    return barcode_from_filename(path)
 
 
 def infer_bam_barcode(path: Path) -> tuple[str | None, str | None]:
@@ -522,14 +541,14 @@ def discover_input_records(
         discovery_errors,
         "fasta",
         fasta_dir,
-        re.compile(r"^(barcode\d+)\.final\.(?:fasta|fa)$", re.IGNORECASE),
+        lambda path: match_barcode_file(path, {".fasta", ".fa"}, {"final"}),
     )
     discover_files_for_key(
         records,
         discovery_errors,
         "gbk",
         genbank_dir,
-        re.compile(r"^(barcode\d+)\.annotations\.gbk$", re.IGNORECASE),
+        lambda path: match_barcode_file(path, {".gbk"}, {"annotations"}),
     )
     discover_bam_files(records, discovery_errors, bam_dir, exclude_dirs=exclude_dirs)
     if fastq_dir is not None:
@@ -538,7 +557,7 @@ def discover_input_records(
             discovery_errors,
             "fastq",
             fastq_dir,
-            re.compile(r"^(barcode\d+)\.final\.(?:fastq|fq)$", re.IGNORECASE),
+            lambda path: match_barcode_file(path, {".fastq", ".fq"}, {"final"}),
         )
     if maf_dir is not None:
         discover_files_for_key(
@@ -546,7 +565,7 @@ def discover_input_records(
             discovery_errors,
             "maf",
             maf_dir,
-            re.compile(r"^(barcode\d+)\.assembly\.maf$", re.IGNORECASE),
+            lambda path: match_barcode_file(path, {".maf"}, {"assembly"}),
         )
     return dict(records), discovery_errors
 
