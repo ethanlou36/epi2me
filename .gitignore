@@ -39,6 +39,7 @@ reads.fastq
 /barcode*.final.fastq
 /barcode*.final.fq
 /barcode*.assembly.maf
+/DH5a, two contigs.zip
 
 # Generated customer/package artifacts
 WPS Data_Order #*/
