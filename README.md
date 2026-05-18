@@ -53,7 +53,7 @@ The report command assumes all input run folders live under:
 ## 3. Prepare the Input Folder
 
 Start with the EPI2ME output files for a sequencing run. Put the FASTA,
-GenBank, BAM, metadata, and any optional FASTQ/MAF files in one folder under
+GenBank, BAM, FASTQ, metadata, and any optional MAF files in one folder under
 `C:\WPS data\`. A clean layout looks like this:
 
 ```text
@@ -65,8 +65,8 @@ C:\WPS data\Run_2026_04_29\
   FBD...barcode01...bam
   barcode02\
     FBD...bam
-  barcode01.final.fastq         optional
-  barcode02.final.fastq         optional
+  barcode01.final.fastq
+  barcode02.final.fastq
   barcode01.assembly.maf        optional
   barcode02.assembly.maf        optional
   WPS_Working_Sheet_2026_04_29.xlsx
@@ -76,14 +76,17 @@ Each barcode must have:
 
 - `barcodeXX.final.fasta`
 - `barcodeXX.annotations.gbk`
+- `barcodeXX.final.fastq`
 - one raw/unmapped `.bam` file whose filename contains the barcode, such as
   `FBD...barcode01...bam`, or one raw/unmapped `.bam` file inside a barcode
   folder such as `barcode02\FBD...bam`.
 
 Optional files:
 
-- `barcodeXX.final.fastq`
 - `barcodeXX.assembly.maf`
+
+If a FASTQ is missing, the run still completes and the AB1 is generated from the
+FASTA with default quality scores, but the sample is reported with a warning.
 
 The metadata sheet must contain the same barcode numbers as the data files. For
 example, a row with `Barcode #` equal to `1` matches `barcode01`.

@@ -641,6 +641,12 @@ def generate_ab1_files(
     return [out_ab1]
 
 
+def validate_expected_fastq(record: dict[str, Path]) -> list[str]:
+    if "fastq" not in record:
+        return ["missing expected FASTQ; AB1 generated from FASTA with default Q30 quality scores"]
+    return []
+
+
 def read_lengths_from_bam(bam_path: Path) -> list[int]:
     lengths = []
     with pysam.AlignmentFile(bam_path, "rb", check_sq=False) as bam:
@@ -1303,7 +1309,8 @@ def package_sample(
         low_confidence_qscore=LOW_CONFIDENCE_QSCORE,
         multimer_denominator=multimer_denominator,
     )
-    warnings = validate_length_consistency(metadata, renamed["length_bp"], report_summary)
+    warnings = validate_expected_fastq(record)
+    warnings.extend(validate_length_consistency(metadata, renamed["length_bp"], report_summary))
 
     per_base_src = Path(report_summary["outputs"]["per_base_details_csv"])
     low_conf_src = Path(report_summary["outputs"]["low_confidence_bases_csv"])
@@ -1381,7 +1388,8 @@ def parse_args() -> argparse.Namespace:
         help=(
             f"Name of the folder under {INPUT_ROOT} containing all run inputs: "
             "barcodeXX.final.fasta/fa, barcodeXX.annotations.gbk, raw/unmapped BAMs, "
-            "optional FASTQ/MAF files, and exactly one metadata CSV, TSV, or XLSX file. "
+            "barcodeXX.final.fastq/fq, optional MAF files, and exactly one metadata CSV, TSV, or XLSX file. "
+            "Missing FASTQ files warn but do not stop packaging. "
             "BAMs may be directly inside it or inside barcodeXX subfolders."
         ),
     )
