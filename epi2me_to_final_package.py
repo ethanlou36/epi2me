@@ -107,7 +107,7 @@ DEFAULT_OUTPUT_SUBDIR = "output"
 DEFAULT_LOGO_PATH = Path(__file__).resolve().with_name("Alta Biotech Logo.jpg")
 DEFAULT_ECOLI_REFERENCE_FASTA = Path(__file__).resolve().with_name("E. Coli Genome.fna")
 HOST_DNA_MIN_ALIGNED_BP = 1300
-HOST_DNA_MIN_ALIGNED_PCT = 91.0
+HOST_DNA_MIN_ALIGNED_PCT = 98.0
 
 
 def slugify(value: str) -> str:
@@ -1230,13 +1230,18 @@ def compute_host_dna_from_alignment(host_bam: Path) -> dict[str, object]:
                 host_read_bases += read_length
                 host_aligned_bases += aligned_bp
 
-    host_dna_pct = host_read_bases / total_read_bases * 100.0 if total_read_bases else 0.0
+    host_read_pct = host_read_count / total_read_count * 100.0 if total_read_count else 0.0
+    host_read_base_pct = host_read_bases / total_read_bases * 100.0 if total_read_bases else 0.0
+    host_aligned_base_pct = host_aligned_bases / total_read_bases * 100.0 if total_read_bases else 0.0
     return {
         "method": "ecoli_reference_alignment",
         "reference_fasta": str(DEFAULT_ECOLI_REFERENCE_FASTA),
         "host_aligned_bp_threshold": HOST_DNA_MIN_ALIGNED_BP,
         "host_aligned_pct_threshold": HOST_DNA_MIN_ALIGNED_PCT,
-        "host_dna_pct": round(host_dna_pct, 3),
+        "host_dna_pct": round(host_read_pct, 3),
+        "host_read_pct": round(host_read_pct, 3),
+        "host_read_base_pct": round(host_read_base_pct, 3),
+        "host_aligned_base_pct": round(host_aligned_base_pct, 3),
         "host_read_count": host_read_count,
         "host_read_bases": host_read_bases,
         "host_aligned_bases": host_aligned_bases,
