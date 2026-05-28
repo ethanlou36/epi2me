@@ -37,7 +37,7 @@ import pysam
 
 from bam_to_per_base_data import summarize_bam_to_table
 
-MULTIMER_TOLERANCE_FRACTION = 0.10
+MULTIMER_TOLERANCE_FRACTION = 0.15
 MIN_MULTIMER_ALIGNMENT_FRACTION = 0.50
 MIN_MULTIMER_MAPQ = 1
 READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP = 1000
@@ -447,10 +447,10 @@ def bam_summary(bam_path, contig_length, multimer_denominator=DEFAULT_MULTIMER_D
         "mapped_mean_read_length": round(statistics.fmean(mapped_primary_read_lengths), 3)
         if mapped_primary_read_lengths
         else 0.0,
-        "monomer_pct": selected_moles_pct["1-mer"],
-        "dimer_pct": selected_moles_pct["2-mer"],
-        "trimer_pct": selected_moles_pct["3-mer"],
-        "tetramer_pct": selected_moles_pct["4-mer"],
+        "monomer_pct": selected_mass_pct["1-mer"],
+        "dimer_pct": selected_mass_pct["2-mer"],
+        "trimer_pct": selected_mass_pct["3-mer"],
+        "tetramer_pct": selected_mass_pct["4-mer"],
         "multimer_by_moles_pct": selected_moles_pct,
         "multimer_by_mass_pct": selected_mass_pct,
         "multimer_by_all_eligible_reads_pct": multimer["moles_pct"],

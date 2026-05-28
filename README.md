@@ -168,6 +168,12 @@ python3 epi2me_to_final_package.py \
 - `--threads 4` makes alignment faster.
 - `--sort-memory 1G` gives `samtools sort` more memory.
 
+Multimer classification uses a 15% length tolerance around each plasmid
+multiple. For example, a 5,000 bp contig treats reads near 5,000 bp as monomer
+and reads near 10,000 bp as dimer. The PDF table labels stay simple
+(`Monomer`, `Dimer`, etc.), but the displayed percentages are base-weighted so
+they match the read-length distribution graph's `Total Bases (kb)` view.
+
 It is okay to reuse the same `--output-dir`. If the same barcode is run again,
 the script removes the previous files for that barcode and writes fresh ones.
 Reports for other barcodes in the same order folder are left alone.
