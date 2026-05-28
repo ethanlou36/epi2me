@@ -174,6 +174,13 @@ and reads near 10,000 bp as dimer. The PDF table labels stay simple
 (`Monomer`, `Dimer`, etc.), but the displayed percentages are base-weighted so
 they match the read-length distribution graph's `Total Bases (kb)` view.
 
+The report also checks the read-length distribution for evidence that the sample
+is not a single contig. If a sizeable base-weighted read-length peak is not near
+any 1x-4x multiple of the reported contig length, `Single Contig?` is reported
+as `No`. Reads in those non-contig peaks are excluded from the multimer
+calculation so an unrelated contig-size population does not distort the
+monomer/dimer/trimer/tetramer percentages.
+
 It is okay to reuse the same `--output-dir`. If the same barcode is run again,
 the script removes the previous files for that barcode and writes fresh ones.
 Reports for other barcodes in the same order folder are left alone.

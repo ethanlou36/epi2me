@@ -42,6 +42,8 @@ MIN_MULTIMER_ALIGNMENT_FRACTION = 0.50
 MIN_MULTIMER_MAPQ = 1
 READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP = 1000
 PLOT_Y_AXIS_HEADROOM_FRACTION = 0.10
+NON_MULTIMER_PEAK_MIN_BASE_FRACTION = 0.08
+NON_MULTIMER_PEAK_MIN_READ_COUNT = 3
 MULTIMER_DENOMINATOR_CLASSIFIED_READS = "classified-reads"
 MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS = "all-eligible-reads"
 MULTIMER_DENOMINATOR_CHOICES = (
@@ -295,6 +297,88 @@ def classify_multimer(read_length, contig_length, tolerance_fraction=MULTIMER_TO
     return candidates[0][1]
 
 
+def read_length_distribution_bins(read_lengths):
+    if not read_lengths:
+        return None
+    max_len = max(read_lengths)
+    bin_size = max(250, int(math.ceil(max_len / 24 / 50.0)) * 50)
+    start = int(math.floor(min(read_lengths) / bin_size) * bin_size)
+    stop = int(math.ceil(max_len / bin_size) * bin_size) + bin_size
+    return bin_size, list(range(start, stop + bin_size, bin_size))
+
+
+def read_length_peak_is_multimer(length_bp, contig_length):
+    return classify_multimer(length_bp, contig_length=contig_length) is not None
+
+
+def detect_non_multimer_read_length_peaks(read_lengths, contig_length):
+    displayed_lengths = [
+        length
+        for length in read_lengths
+        if length > READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP
+    ]
+    bins_info = read_length_distribution_bins(displayed_lengths)
+    if contig_length <= 0 or bins_info is None:
+        return {
+            "single_contig_by_read_lengths": True,
+            "non_multimer_peak_count": 0,
+            "non_multimer_peak_read_count": 0,
+            "non_multimer_peak_base_count": 0,
+            "non_multimer_peak_base_pct": 0.0,
+            "non_multimer_peak_intervals": [],
+        }
+
+    _bin_size, bins = bins_info
+    bin_count = len(bins) - 1
+    base_totals = [0] * bin_count
+    read_counts = [0] * bin_count
+    total_bases = sum(displayed_lengths)
+    for length in displayed_lengths:
+        index = min(max(int((length - bins[0]) // (bins[1] - bins[0])), 0), bin_count - 1)
+        base_totals[index] += length
+        read_counts[index] += 1
+
+    intervals = []
+    for index, base_total in enumerate(base_totals):
+        if read_counts[index] < NON_MULTIMER_PEAK_MIN_READ_COUNT:
+            continue
+        base_fraction = base_total / total_bases if total_bases else 0.0
+        if base_fraction < NON_MULTIMER_PEAK_MIN_BASE_FRACTION:
+            continue
+        previous_bases = base_totals[index - 1] if index > 0 else 0
+        next_bases = base_totals[index + 1] if index + 1 < bin_count else 0
+        if base_total < previous_bases or base_total < next_bases:
+            continue
+        center = (bins[index] + bins[index + 1]) / 2.0
+        if read_length_peak_is_multimer(center, contig_length):
+            continue
+        intervals.append(
+            {
+                "start_bp": bins[index],
+                "end_bp": bins[index + 1],
+                "center_bp": round(center, 1),
+                "read_count": read_counts[index],
+                "base_count": base_total,
+                "base_pct": round(base_fraction * 100.0, 3),
+            }
+        )
+
+    peak_read_count = sum(item["read_count"] for item in intervals)
+    peak_base_count = sum(item["base_count"] for item in intervals)
+    return {
+        "single_contig_by_read_lengths": len(intervals) == 0,
+        "non_multimer_peak_count": len(intervals),
+        "non_multimer_peak_read_count": peak_read_count,
+        "non_multimer_peak_base_count": peak_base_count,
+        "non_multimer_peak_base_pct": round((peak_base_count / total_bases * 100.0), 3) if total_bases else 0.0,
+        "non_multimer_peak_intervals": intervals,
+    }
+
+
+def length_in_intervals(length, intervals):
+    return any(interval["start_bp"] <= length < interval["end_bp"] for interval in intervals)
+
+
 def multimer_breakdown(
     read_lengths,
     contig_length,
@@ -428,7 +512,14 @@ def bam_summary(bam_path, contig_length, multimer_denominator=DEFAULT_MULTIMER_D
             if is_multimer_eligible_alignment(read):
                 multimer_eligible_read_lengths.append(qlen)
 
-    multimer = multimer_breakdown(multimer_eligible_read_lengths, contig_length)
+    read_length_contig_detection = detect_non_multimer_read_length_peaks(primary_read_lengths, contig_length)
+    non_multimer_peak_intervals = read_length_contig_detection["non_multimer_peak_intervals"]
+    adjusted_multimer_eligible_read_lengths = [
+        length
+        for length in multimer_eligible_read_lengths
+        if not length_in_intervals(length, non_multimer_peak_intervals)
+    ]
+    multimer = multimer_breakdown(adjusted_multimer_eligible_read_lengths, contig_length)
     selected_moles_pct, selected_mass_pct, multimer_calculated = selected_multimer_percentages(
         multimer,
         multimer_denominator,
@@ -459,6 +550,10 @@ def bam_summary(bam_path, contig_length, multimer_denominator=DEFAULT_MULTIMER_D
         "multimer_denominator": multimer_denominator,
         "multimer_eligible_read_count": multimer["eligible_read_count"],
         "multimer_eligible_base_count": multimer["eligible_base_count"],
+        "multimer_excluded_non_contig_peak_read_count": len(multimer_eligible_read_lengths)
+        - len(adjusted_multimer_eligible_read_lengths),
+        "multimer_excluded_non_contig_peak_base_count": sum(multimer_eligible_read_lengths)
+        - sum(adjusted_multimer_eligible_read_lengths),
         "unclassified_multimer_read_pct": multimer["unclassified_read_pct"],
         "unclassified_multimer_base_pct": multimer["unclassified_base_pct"],
         "classified_multimer_read_count": multimer["classified_read_count"],
@@ -467,6 +562,7 @@ def bam_summary(bam_path, contig_length, multimer_denominator=DEFAULT_MULTIMER_D
         "unclassified_multimer_base_count": multimer["unclassified_base_count"],
         "multimer_min_alignment_fraction": MIN_MULTIMER_ALIGNMENT_FRACTION,
         "multimer_min_mapq": MIN_MULTIMER_MAPQ,
+        "read_length_contig_detection": read_length_contig_detection,
         "primary_read_lengths": primary_read_lengths,
     }
 
@@ -683,6 +779,8 @@ def generate_report_data(
             "multimer_denominator": bam_stats["multimer_denominator"],
             "multimer_eligible_read_count": bam_stats["multimer_eligible_read_count"],
             "multimer_eligible_base_count": bam_stats["multimer_eligible_base_count"],
+            "multimer_excluded_non_contig_peak_read_count": bam_stats["multimer_excluded_non_contig_peak_read_count"],
+            "multimer_excluded_non_contig_peak_base_count": bam_stats["multimer_excluded_non_contig_peak_base_count"],
             "unclassified_multimer_read_pct": bam_stats["unclassified_multimer_read_pct"],
             "unclassified_multimer_base_pct": bam_stats["unclassified_multimer_base_pct"],
             "classified_multimer_read_count": bam_stats["classified_multimer_read_count"],
@@ -691,7 +789,9 @@ def generate_report_data(
             "unclassified_multimer_base_count": bam_stats["unclassified_multimer_base_count"],
             "multimer_min_alignment_fraction": bam_stats["multimer_min_alignment_fraction"],
             "multimer_min_mapq": bam_stats["multimer_min_mapq"],
-            "single_contig": count_fasta_records(contig_fasta) == 1,
+            "read_length_contig_detection": bam_stats["read_length_contig_detection"],
+            "single_contig": count_fasta_records(contig_fasta) == 1
+            and bam_stats["read_length_contig_detection"]["single_contig_by_read_lengths"],
         },
         "coverage": coverage_stats,
         "contamination": {
