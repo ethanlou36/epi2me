@@ -325,6 +325,10 @@ def write_real_ab1(out_ab1_path, traces, peak_locs, seq, q_scores):
     cmnt_payload = to_pstring("Generated from FASTQ by fastq_to_ab1.py")
 
     entries = [
+        AbifEntry("DATA", 1, 4, 2, n_points, channel_payloads["G"]),
+        AbifEntry("DATA", 2, 4, 2, n_points, channel_payloads["A"]),
+        AbifEntry("DATA", 3, 4, 2, n_points, channel_payloads["T"]),
+        AbifEntry("DATA", 4, 4, 2, n_points, channel_payloads["C"]),
         AbifEntry("DATA", 9, 4, 2, n_points, channel_payloads["G"]),
         AbifEntry("DATA", 10, 4, 2, n_points, channel_payloads["A"]),
         AbifEntry("DATA", 11, 4, 2, n_points, channel_payloads["T"]),
@@ -332,10 +336,13 @@ def write_real_ab1(out_ab1_path, traces, peak_locs, seq, q_scores):
         AbifEntry("FWO_", 1, 2, 1, 4, b"GATC"),
         AbifEntry("LANE", 1, 4, 2, 1, struct.pack(">H", 1)),
         AbifEntry("PBAS", 1, 2, 1, n_bases, base_payload),
+        AbifEntry("PBAS", 2, 2, 1, n_bases, base_payload),
         AbifEntry("PCON", 1, 2, 1, n_bases, q_bytes),
+        AbifEntry("PCON", 2, 2, 1, n_bases, q_bytes),
         AbifEntry("PDMF", 1, 18, 1, len(pdmf_payload), pdmf_payload),
         AbifEntry("PDMF", 2, 18, 1, len(pdmf_payload), pdmf_payload),
         AbifEntry("PLOC", 1, 4, 2, n_bases, peak_payload),
+        AbifEntry("PLOC", 2, 4, 2, n_bases, peak_payload),
         AbifEntry("S/N%", 1, 4, 2, 4, sn_payload),
         AbifEntry("SMPL", 1, 18, 1, len(smpl_payload), smpl_payload),
         AbifEntry("CMNT", 1, 18, 1, len(cmnt_payload), cmnt_payload),

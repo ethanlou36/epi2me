@@ -50,11 +50,11 @@ from generate_report import (
     MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS,
     MULTIMER_DENOMINATOR_CHOICES,
     MULTIMER_TOLERANCE_FRACTION,
-    COVERAGE_Y_AXIS_HEADROOM,
     READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP,
     count_fasta_records,
     generate_report_data,
     read_first_fasta_record,
+    y_axis_top_with_headroom,
 )
 
 
@@ -842,7 +842,7 @@ def plot_pdf_coverage_map(per_base_csv: Path, low_conf_csv: Path, out_path: Path
         if low_positions:
             ax.scatter(low_positions, low_depths, marker="x", color="#e67e22", s=16, linewidths=0.8)
         ax.set_xlim(left=0, right=max(positions))
-        ax.set_ylim(bottom=0, top=max(depths, default=0) + COVERAGE_Y_AXIS_HEADROOM)
+        ax.set_ylim(bottom=0, top=y_axis_top_with_headroom(max(depths, default=0)))
     else:
         ax.text(0.5, 0.5, "No coverage data available", ha="center", va="center", transform=ax.transAxes)
         ax.set_xlim(left=0, right=1)
@@ -921,7 +921,7 @@ def plot_read_length_vs_bases(raw_bam: Path, aligned_bam: Path, contig_length: i
         ax.bar(centers, mapped_bases_kb, width=width, color=THEME["purple"], label="Mapped reads")
         ax.bar(centers, other_bases_kb, width=width, bottom=mapped_bases_kb, color=THEME["green"], label="Unmapped reads")
         ax.set_xlim(left=max(0, start - bin_size * 0.25), right=stop)
-        ax.set_ylim(bottom=0)
+        ax.set_ylim(bottom=0, top=y_axis_top_with_headroom(ymax))
     else:
         ax.text(0.5, 0.5, "No read-length data available", ha="center", va="center", transform=ax.transAxes)
         ax.set_xlim(left=0, right=1)
@@ -1290,19 +1290,7 @@ def render_pdf_report(
         dist_head = fig.add_axes([0.055, 0.345, 0.84, 0.04])
         dist_head.set_axis_off()
         dist_head.text(0.0, 0.5, "Read Length Distribution", ha="left", va="center", fontsize=12.5, fontweight="bold", color="#335F91")
-        draw_image(fig, [0.18, 0.09, 0.64, 0.255], read_length_bases_png)
-        dist_note = fig.add_axes([0.18, 0.068, 0.64, 0.018])
-        dist_note.set_axis_off()
-        dist_note.text(
-            0.5,
-            0.5,
-            f"reads <= {READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP:,} bp omitted from this display",
-            ha="center",
-            va="center",
-            fontsize=7.5,
-            color="#666666",
-            style="italic",
-        )
+        draw_image(fig, [0.18, 0.075, 0.64, 0.27], read_length_bases_png)
         draw_footer(fig)
 
         pdf.savefig(fig)

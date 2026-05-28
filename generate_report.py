@@ -37,11 +37,11 @@ import pysam
 
 from bam_to_per_base_data import summarize_bam_to_table
 
-MULTIMER_TOLERANCE_FRACTION = 0.05
+MULTIMER_TOLERANCE_FRACTION = 0.10
 MIN_MULTIMER_ALIGNMENT_FRACTION = 0.50
 MIN_MULTIMER_MAPQ = 1
 READ_LENGTH_DISTRIBUTION_MIN_DISPLAY_BP = 1000
-COVERAGE_Y_AXIS_HEADROOM = 1000
+PLOT_Y_AXIS_HEADROOM_FRACTION = 0.10
 MULTIMER_DENOMINATOR_CLASSIFIED_READS = "classified-reads"
 MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS = "all-eligible-reads"
 MULTIMER_DENOMINATOR_CHOICES = (
@@ -49,6 +49,12 @@ MULTIMER_DENOMINATOR_CHOICES = (
     MULTIMER_DENOMINATOR_ALL_ELIGIBLE_READS,
 )
 DEFAULT_MULTIMER_DENOMINATOR = MULTIMER_DENOMINATOR_CLASSIFIED_READS
+
+
+def y_axis_top_with_headroom(max_value, headroom_fraction=PLOT_Y_AXIS_HEADROOM_FRACTION):
+    if max_value <= 0:
+        return 1
+    return max_value * (1.0 + headroom_fraction)
 
 
 def read_first_fasta_record(path):
@@ -494,7 +500,7 @@ def plot_coverage_map(per_base_rows, low_conf_rows, out_path, title):
     if low_positions:
         ax.scatter(low_positions, low_depths, marker="x", color="#e67e22", s=18, linewidths=0.8)
     ax.set_xlim(left=0, right=max(positions))
-    ax.set_ylim(bottom=0, top=max(depths, default=0) + COVERAGE_Y_AXIS_HEADROOM)
+    ax.set_ylim(bottom=0, top=y_axis_top_with_headroom(max(depths, default=0)))
     ax.margins(x=0)
     ax.set_xlabel("Base Position")
     ax.set_ylabel("Depth")
