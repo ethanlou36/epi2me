@@ -181,6 +181,12 @@ as `No`. Reads in those non-contig peaks are excluded from the multimer
 calculation so an unrelated contig-size population does not distort the
 monomer/dimer/trimer/tetramer percentages.
 
+Host DNA % is calculated by aligning the same raw reads to the bundled
+`E. Coli Genome.fna` reference. A read counts as host DNA when its E. coli
+alignment covers more than 1,300 bp and more than 91% of the read length.
+The reported Host DNA % is the total bases from those host-classified reads
+divided by total primary read bases.
+
 It is okay to reuse the same `--output-dir`. If the same barcode is run again,
 the script removes the previous files for that barcode and writes fresh ones.
 Reports for other barcodes in the same order folder are left alone.

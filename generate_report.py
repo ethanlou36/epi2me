@@ -679,6 +679,7 @@ def generate_report_data(
     low_confidence_qscore=12,
     plasmidasaurus_summary_txt=None,
     ecoli_contamination_pct=None,
+    ecoli_contamination_details=None,
     multimer_denominator=DEFAULT_MULTIMER_DENOMINATOR,
 ):
     out_dir = Path(out_dir)
@@ -796,6 +797,7 @@ def generate_report_data(
         "coverage": coverage_stats,
         "contamination": {
             "ecoli_genomic_contamination_pct": ecoli_contamination_pct,
+            "ecoli_genomic_contamination_details": ecoli_contamination_details,
         },
         "maf_summary": maf_summary,
         "genbank_summary": (

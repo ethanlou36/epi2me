@@ -105,6 +105,9 @@ SIZE_MISMATCH_TOLERANCE_BP = 100
 INPUT_ROOT = Path("/mnt/c/WPS data")
 DEFAULT_OUTPUT_SUBDIR = "output"
 DEFAULT_LOGO_PATH = Path(__file__).resolve().with_name("Alta Biotech Logo.jpg")
+DEFAULT_ECOLI_REFERENCE_FASTA = Path(__file__).resolve().with_name("E. Coli Genome.fna")
+HOST_DNA_MIN_ALIGNED_BP = 1300
+HOST_DNA_MIN_ALIGNED_PCT = 91.0
 
 
 def slugify(value: str) -> str:
@@ -1139,6 +1142,49 @@ def ecoli_contamination_pct(report_summary: dict) -> float | None:
     return 0.0
 
 
+def compute_host_dna_from_alignment(host_bam: Path) -> dict[str, object]:
+    total_read_count = 0
+    total_read_bases = 0
+    host_read_count = 0
+    host_read_bases = 0
+    host_aligned_bases = 0
+    primary_names = set()
+
+    with pysam.AlignmentFile(host_bam, "rb") as bam:
+        for read in bam.fetch(until_eof=True):
+            if read.is_secondary or read.is_supplementary:
+                continue
+            read_name = read.query_name or ""
+            if read_name in primary_names:
+                raise ValueError(f"Duplicate primary read name in host-aligned BAM: {read_name!r}")
+            primary_names.add(read_name)
+            read_length = read.query_length or 0
+            total_read_count += 1
+            total_read_bases += read_length
+            if read_length <= 0 or read.is_unmapped:
+                continue
+            aligned_bp = read.query_alignment_length or 0
+            aligned_pct = aligned_bp / read_length * 100.0
+            if aligned_bp > HOST_DNA_MIN_ALIGNED_BP and aligned_pct > HOST_DNA_MIN_ALIGNED_PCT:
+                host_read_count += 1
+                host_read_bases += read_length
+                host_aligned_bases += aligned_bp
+
+    host_dna_pct = host_read_bases / total_read_bases * 100.0 if total_read_bases else 0.0
+    return {
+        "method": "ecoli_reference_alignment",
+        "reference_fasta": str(DEFAULT_ECOLI_REFERENCE_FASTA),
+        "host_aligned_bp_threshold": HOST_DNA_MIN_ALIGNED_BP,
+        "host_aligned_pct_threshold": HOST_DNA_MIN_ALIGNED_PCT,
+        "host_dna_pct": round(host_dna_pct, 3),
+        "host_read_count": host_read_count,
+        "host_read_bases": host_read_bases,
+        "host_aligned_bases": host_aligned_bases,
+        "total_read_count": total_read_count,
+        "total_read_bases": total_read_bases,
+    }
+
+
 def format_percent(value: float | None) -> str:
     if value is None:
         return "N/A"
@@ -1464,6 +1510,28 @@ def package_sample(
     if fasta_index.exists():
         fasta_index.unlink()
 
+    warnings = validate_expected_fastq(record)
+    host_contamination_details = None
+    host_contamination_pct = None
+    host_aligned_bam = None
+    if DEFAULT_ECOLI_REFERENCE_FASTA.exists():
+        host_alignment_result = run_pipeline(
+            bam_path,
+            DEFAULT_ECOLI_REFERENCE_FASTA,
+            work_dir / "host_alignment",
+            minimap2_preset="map-ont",
+            threads=threads,
+            sort_memory=sort_memory,
+            keep_intermediates=keep_intermediates,
+            allow_aligned_input=allow_aligned_input,
+        )
+        host_bam = Path(host_alignment_result["sorted_bam"])
+        host_aligned_bam = str(host_bam)
+        host_contamination_details = compute_host_dna_from_alignment(host_bam)
+        host_contamination_pct = float(host_contamination_details["host_dna_pct"])
+    else:
+        warnings.append(f"missing E. coli host genome reference: {DEFAULT_ECOLI_REFERENCE_FASTA}")
+
     report_dir = work_dir / "report"
     report_summary = generate_report_data(
         aligned_bam=aligned_bam,
@@ -1474,9 +1542,10 @@ def package_sample(
         gbk_path=gbk_out,
         sample_name=sample_stem,
         low_confidence_qscore=LOW_CONFIDENCE_QSCORE,
+        ecoli_contamination_pct=host_contamination_pct,
+        ecoli_contamination_details=host_contamination_details,
         multimer_denominator=multimer_denominator,
     )
-    warnings = validate_expected_fastq(record)
     warnings.extend(validate_length_consistency(metadata, renamed["length_bp"], report_summary))
 
     per_base_src = Path(report_summary["outputs"]["per_base_details_csv"])
@@ -1531,6 +1600,7 @@ def package_sample(
                     "per_base_details": str(per_base_dst),
                     "low_confidence": str(low_conf_dst),
                     "aligned_bam": str(aligned_bam),
+                    "host_aligned_bam": host_aligned_bam,
                 },
             },
             indent=2,
