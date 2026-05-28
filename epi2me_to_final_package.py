@@ -642,6 +642,66 @@ def expand_shared_barcode_files(records: dict[str, dict[str, object]]) -> dict[s
     return expanded
 
 
+def primary_record_id_for_mixed_contigs(records: dict[str, dict[str, object]], record_ids: list[str]) -> str:
+    contig001 = [
+        record_id
+        for record_id in record_ids
+        if records[record_id].get("contig_label") == "contig001"
+    ]
+    if contig001:
+        return sorted(contig001)[0]
+
+    def fasta_length(record_id: str) -> int:
+        fasta_path = records[record_id].get("fasta")
+        if not isinstance(fasta_path, Path):
+            return 0
+        try:
+            return int(read_first_fasta_record(fasta_path)["length_bp"])
+        except Exception:
+            return 0
+
+    return max(sorted(record_ids), key=fasta_length)
+
+
+def collapse_mixed_contigs_to_primary(records: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
+    by_barcode: dict[str, list[str]] = defaultdict(list)
+    for record_id, record in records.items():
+        barcode = record.get("barcode")
+        if isinstance(barcode, str):
+            by_barcode[barcode].append(record_id)
+
+    collapsed: dict[str, dict[str, object]] = {}
+    for barcode, record_ids in sorted(by_barcode.items()):
+        contig_record_ids = [
+            record_id
+            for record_id in record_ids
+            if records[record_id].get("contig_label") and records[record_id].get("fasta")
+        ]
+        if len(contig_record_ids) <= 1:
+            for record_id in record_ids:
+                collapsed[record_id] = records[record_id]
+            continue
+
+        primary_record_id = primary_record_id_for_mixed_contigs(records, contig_record_ids)
+        primary = dict(records[primary_record_id])
+        ignored_labels = [
+            str(records[record_id].get("contig_label"))
+            for record_id in sorted(contig_record_ids)
+            if record_id != primary_record_id
+        ]
+        primary["mixed_contig_count"] = len(contig_record_ids)
+        primary["primary_contig_label"] = primary.get("contig_label")
+        primary["ignored_contig_labels"] = ignored_labels
+        primary.pop("contig_label", None)
+        print(
+            f"detected {len(contig_record_ids)} contigs for {barcode}; "
+            f"using {primary['primary_contig_label']} as the primary contig for report generation"
+        )
+        collapsed[barcode] = primary
+
+    return collapsed
+
+
 def discover_input_records(
     fasta_dir: Path,
     genbank_dir: Path,
@@ -683,7 +743,7 @@ def discover_input_records(
             maf_dir,
             lambda path: match_barcode_file(path, {".maf"}, {"assembly"}),
         )
-    return expand_shared_barcode_files(dict(records)), discovery_errors
+    return collapse_mixed_contigs_to_primary(expand_shared_barcode_files(dict(records))), discovery_errors
 
 
 def sample_stem_for_barcode(barcode: str, metadata: dict[str, str]) -> str:
@@ -1406,7 +1466,7 @@ def cleanup_previous_sample_output(output_root: Path, barcode: str, sample_stem:
                 summary = json.loads(summary_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if summary.get("sample_name") != sample_stem:
+            if summary.get("barcode") != barcode and summary.get("sample_name") != sample_stem:
                 continue
             paths = summary.get("paths") or {}
             order_dir = paths.get("order_dir")
@@ -1511,6 +1571,11 @@ def package_sample(
         fasta_index.unlink()
 
     warnings = validate_expected_fastq(record)
+    if record.get("mixed_contig_count"):
+        warnings.append(
+            "multiple contigs detected; report generated from primary contig "
+            f"{record.get('primary_contig_label', 'unknown')}"
+        )
     host_contamination_details = None
     host_contamination_pct = None
     host_aligned_bam = None
@@ -1587,6 +1652,9 @@ def package_sample(
                 "barcode": barcode,
                 "record_id": record_id,
                 "contig_label": contig_label,
+                "mixed_contig_count": record.get("mixed_contig_count"),
+                "primary_contig_label": record.get("primary_contig_label"),
+                "ignored_contig_labels": record.get("ignored_contig_labels"),
                 "sample_name": sample_stem,
                 "order_number": order_number,
                 "multimer_denominator": multimer_denominator,
@@ -1613,6 +1681,9 @@ def package_sample(
         "barcode": barcode,
         "record_id": record_id,
         "contig_label": contig_label,
+        "mixed_contig_count": record.get("mixed_contig_count"),
+        "primary_contig_label": record.get("primary_contig_label"),
+        "ignored_contig_labels": record.get("ignored_contig_labels"),
         "sample_name": sample_stem,
         "order_number": order_number,
         "order_dir": str(order_dir),

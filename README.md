@@ -100,8 +100,8 @@ exactly one matching metadata `.xlsx`, `.csv`, or `.tsv` file.
 ## 4. Mixed-Contig Samples
 
 Mixed or contaminated samples can produce more than one contig for the same
-barcode and metadata row. The script handles this by generating one report and
-one output file set per contig.
+barcode and metadata row. The script detects those extra contigs, but report
+generation is based on the primary contig only.
 
 The clearest input style is to include an explicit contig suffix in each
 contig-specific filename:
@@ -117,11 +117,15 @@ C:\WPS data\Run_2026_04_29\
   WPS_Working_Sheet_2026_04_29.xlsx
 ```
 
-This produces separate outputs such as `sample_contig001.fa`,
-`sample_contig002.fa`, and one report PDF per contig. A single barcode-level
-BAM or FASTQ is reused for each contig. Contig-specific BAM, FASTQ, or MAF files
-are also supported when their filenames include the same `contig001`,
-`contig002`, etc. suffix.
+When explicit contig suffixes are present, `contig001` is treated as the primary
+contig. If there is no `contig001`, the longest FASTA is used as the primary
+contig. The FASTA, GenBank, AB1, per-base CSVs, plots, multimer values, host DNA
+calculation, and PDF report are all generated from that primary contig. Secondary
+contigs are not packaged into separate report files.
+
+A single barcode-level BAM or FASTQ is reused for the primary contig.
+Contig-specific BAM, FASTQ, or MAF files are also supported when their filenames
+include the same primary contig suffix.
 
 The script also has a looser fallback for files that do not include contig
 suffixes. If multiple `final` FASTA files are found for the same barcode, it
