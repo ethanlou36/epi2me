@@ -107,7 +107,7 @@ DEFAULT_OUTPUT_SUBDIR = "output"
 DEFAULT_LOGO_PATH = Path(__file__).resolve().with_name("Alta Biotech Logo.jpg")
 DEFAULT_ECOLI_REFERENCE_FASTA = Path(__file__).resolve().with_name("E. Coli Genome.fna")
 HOST_DNA_MIN_ALIGNED_BP = 1300
-HOST_DNA_MIN_ALIGNED_PCT = 98.0
+HOST_DNA_MIN_ALIGNED_PCT = 97.75
 
 
 def slugify(value: str) -> str:
