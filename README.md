@@ -187,7 +187,7 @@ monomer/dimer/trimer/tetramer percentages.
 
 Host DNA % is calculated by aligning the same raw reads to the bundled
 `E. Coli Genome.fna` reference. A read counts as host DNA when its E. coli
-alignment covers more than 1,300 bp and more than 97.75% of the read length.
+alignment covers more than 1,300 bp and more than 91% of the read length.
 The reported Host DNA % is the percentage of primary reads that pass that host
 classification rule. Base-weighted host percentages are also written to
 `report_summary.json` for review, but they are not used as the headline PDF
