@@ -977,14 +977,25 @@ def plot_read_length_vs_bases(raw_bam: Path, aligned_bam: Path, contig_length: i
         band_left = contig_length * (1.0 - MULTIMER_TOLERANCE_FRACTION)
         band_right = contig_length * (1.0 + MULTIMER_TOLERANCE_FRACTION)
         ymax = max((mapped_bases_kb + other_bases_kb).max(), 1)
+        ytop = y_axis_top_with_headroom(ymax)
+        label_y = ymax + (ytop - ymax) * 0.5
         ax.axvspan(band_left, band_right, color="#d9d9d9", alpha=0.6, lw=0)
-        ax.text((band_left + band_right) / 2, ymax * 0.96, "monomer", ha="center", va="bottom", fontsize=9, fontweight="bold")
+        ax.text(
+            (band_left + band_right) / 2,
+            label_y,
+            "Monomer",
+            ha="center",
+            va="center",
+            fontsize=9,
+            fontweight="bold",
+            zorder=4,
+        )
 
         width = bin_size * 0.78
         ax.bar(centers, mapped_bases_kb, width=width, color=THEME["purple"], label="Mapped reads")
         ax.bar(centers, other_bases_kb, width=width, bottom=mapped_bases_kb, color=THEME["green"], label="Unmapped reads")
         ax.set_xlim(left=max(0, start - bin_size * 0.25), right=stop)
-        ax.set_ylim(bottom=0, top=y_axis_top_with_headroom(ymax))
+        ax.set_ylim(bottom=0, top=ytop)
     else:
         ax.text(0.5, 0.5, "No read-length data available", ha="center", va="center", transform=ax.transAxes)
         ax.set_xlim(left=0, right=1)
